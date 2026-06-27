@@ -15,13 +15,13 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 // Type Definitions — Casper Wallet Extension API surface
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** The provider instance returned by calling window.CasperWalletProvider(). */
+/** The provider instance returned by calling new window.CasperWalletProvider(). */
 interface CasperWalletProvider {
   /** Opens the extension popup and requests account authorization. */
-  connect(): Promise<boolean>;
+  requestConnection(): Promise<boolean>;
 
   /** Cleanly revokes the dApp's connection authorization. */
-  disconnect(): Promise<boolean>;
+  disconnectFromSite(): Promise<boolean>;
 
   /**
    * Returns the hex-encoded public key of the currently active account.
@@ -44,11 +44,13 @@ const CasperWalletEventTypes = {
 
 /**
  * The CasperWalletProvider factory lives on window after extension injection.
- * Calling it (as a constructor or plain function) returns the provider instance.
+ * Instantiate it using new window.CasperWalletProvider().
  */
 declare global {
   interface Window {
-    CasperWalletProvider?: () => CasperWalletProvider;
+    CasperWalletProvider?: {
+      new (): CasperWalletProvider;
+    };
   }
 }
 
@@ -86,14 +88,14 @@ function useCasperWallet() {
   // Stable ref so event listeners always close over the latest provider.
   const providerRef = useRef<CasperWalletProvider | null>(null);
 
-  /** Safely instantiate the provider from the global factory. */
+  /** Safely instantiate the provider from the global class. */
   const getProvider = useCallback((): CasperWalletProvider | null => {
     if (typeof window === "undefined" || !window.CasperWalletProvider) {
       return null;
     }
     if (!providerRef.current) {
-      // The extension exports a factory function — call it to get the singleton.
-      providerRef.current = window.CasperWalletProvider();
+      // The extension exports a class constructor — instantiate with new.
+      providerRef.current = new window.CasperWalletProvider();
     }
     return providerRef.current;
   }, []);
@@ -224,7 +226,7 @@ function useCasperWallet() {
     setWalletState({ status: "connecting", publicKey: null, errorMessage: null });
 
     try {
-      const approved = await provider.connect();
+      const approved = await provider.requestConnection();
       if (!approved) {
         // User dismissed the popup without approving.
         setWalletState({
@@ -250,7 +252,7 @@ function useCasperWallet() {
     const provider = getProvider();
     if (!provider) return;
     try {
-      await provider.disconnect();
+      await provider.disconnectFromSite();
       // The `casper-wallet:disconnected` event will reset state.
     } catch (err) {
       // Even if disconnect throws, reset state client-side.

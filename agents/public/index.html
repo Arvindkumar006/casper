@@ -3694,10 +3694,10 @@
       let cwPubKey   = null;
       let cwProvider = null;
 
-      /** Safely get (or create) the provider singleton from the extension factory */
+      /** Safely get (or create) the provider singleton from the extension class */
       function getProvider() {
         if (!window.CasperWalletProvider) return null;
-        if (!cwProvider) cwProvider = window.CasperWalletProvider();
+        if (!cwProvider) cwProvider = new window.CasperWalletProvider();
         return cwProvider;
       }
 
@@ -3849,7 +3849,7 @@
         if (!provider) return;
         setState('connecting', null);
         try {
-          const approved = await provider.connect();
+          const approved = await provider.requestConnection();
           if (!approved) {
             setState('error', 'Connection cancelled.');
           }
@@ -3861,7 +3861,7 @@
 
       async function cwDisconnect() {
         const provider = getProvider();
-        try { if (provider) await provider.disconnect(); } catch (_) {}
+        try { if (provider) await provider.disconnectFromSite(); } catch (_) {}
         setState('disconnected', null);
       }
 
