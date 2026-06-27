@@ -2547,11 +2547,14 @@
         if (result.success) {
           globalHistory = result.data;
           
-          // Sidebar connected Key
+          // Sidebar connected Key (Legacy element fallback)
           const shortKey = globalHistory.walletAddress 
             ? `${globalHistory.walletAddress.substring(0, 8)}...${globalHistory.walletAddress.substring(globalHistory.walletAddress.length - 6)}`
             : '--';
-          document.getElementById('sidebar-key').innerText = shortKey;
+          const sidebarKeyEl = document.getElementById('sidebar-key');
+          if (sidebarKeyEl) {
+            sidebarKeyEl.innerText = shortKey;
+          }
 
           // Update Landing Page static runs counter
           const lMetricRuns = document.getElementById('landing-metric-runs');
