@@ -1995,8 +1995,8 @@
               <span id="kpi-capital" class="status-cell-value glow-emerald">--</span>
             </div>
             <div class="status-cell">
-              <span class="status-cell-title">Network Status</span>
-              <span class="status-cell-value glow-emerald">CONNECTED</span>
+              <span class="status-cell-title">Node RPC Link</span>
+              <span id="kpi-rpc-status" class="status-cell-value" style="color:var(--emerald);">CONNECTED</span>
             </div>
           </div>
         </div>
@@ -2595,9 +2595,20 @@
           renderPortfolioCards();
           renderExplorerLogs();
           renderActiveUnderwritingReport();
+
+          const rpcStatus = document.getElementById('kpi-rpc-status');
+          if (rpcStatus) {
+            rpcStatus.innerText = 'CONNECTED';
+            rpcStatus.style.color = 'var(--emerald)';
+          }
         }
       } catch (err) {
         console.error("Failed to load history metrics:", err);
+        const rpcStatus = document.getElementById('kpi-rpc-status');
+        if (rpcStatus) {
+          rpcStatus.innerText = 'OFFLINE';
+          rpcStatus.style.color = 'var(--rose)';
+        }
       }
     }
 
