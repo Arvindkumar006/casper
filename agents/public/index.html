@@ -2219,6 +2219,7 @@
                   <span id="status-oracle">STANDBY</span>
                 </div>
                 <div id="progress-oracle" class="progress-bar-ascii">[- - -]</div>
+                <div id="data-oracle" style="display:none; font-size:10px; margin-top:8px; color:var(--text-muted); font-family:monospace; white-space:pre-line; text-align:left; border-top:1px solid rgba(255,255,255,0.05); padding-top:6px; width:100%;"></div>
               </div>
 
               <!-- Compliance -->
@@ -2228,6 +2229,7 @@
                   <span id="status-compliance">STANDBY</span>
                 </div>
                 <div id="progress-compliance" class="progress-bar-ascii">[- - -]</div>
+                <div id="data-compliance" style="display:none; font-size:10px; margin-top:8px; color:var(--text-muted); font-family:monospace; white-space:pre-line; text-align:left; border-top:1px solid rgba(255,255,255,0.05); padding-top:6px; width:100%;"></div>
               </div>
 
               <!-- Treasury -->
@@ -2237,6 +2239,7 @@
                   <span id="status-treasury">STANDBY</span>
                 </div>
                 <div id="progress-treasury" class="progress-bar-ascii">[- - -]</div>
+                <div id="data-treasury" style="display:none; font-size:10px; margin-top:8px; color:var(--text-muted); font-family:monospace; white-space:pre-line; text-align:left; border-top:1px solid rgba(255,255,255,0.05); padding-top:6px; width:100%;"></div>
               </div>
 
               <!-- Risk -->
@@ -2246,6 +2249,7 @@
                   <span id="status-risk">STANDBY</span>
                 </div>
                 <div id="progress-risk" class="progress-bar-ascii">[- - -]</div>
+                <div id="data-risk" style="display:none; font-size:10px; margin-top:8px; color:var(--text-muted); font-family:monospace; white-space:pre-line; text-align:left; border-top:1px solid rgba(255,255,255,0.05); padding-top:6px; width:100%;"></div>
               </div>
 
               <!-- Executor -->
@@ -2255,6 +2259,7 @@
                   <span id="status-execution">STANDBY</span>
                 </div>
                 <div id="progress-execution" class="progress-bar-ascii">[- - -]</div>
+                <div id="data-execution" style="display:none; font-size:10px; margin-top:8px; color:var(--text-muted); font-family:monospace; white-space:pre-line; text-align:left; border-top:1px solid rgba(255,255,255,0.05); padding-top:6px; width:100%;"></div>
               </div>
 
             </div>
@@ -3349,76 +3354,110 @@
       const indicators = ['oracle', 'compliance', 'treasury', 'risk', 'execution'];
       indicators.forEach(ind => {
         const el = document.getElementById(`status-${ind}`);
-        el.className = 'badge-status standby';
-        el.innerText = 'Standby';
+        if (el) {
+          el.className = 'badge-status standby';
+          el.innerText = 'Standby';
+        }
         
         const card = document.getElementById(`stage-${ind}`);
-        card.className = 'mission-node-card idle';
+        if (card) {
+          card.className = 'mission-node-card idle';
+        }
 
         const data = document.getElementById(`data-${ind}`);
-        data.style.display = 'none';
-        data.innerText = '';
+        if (data) {
+          data.style.display = 'none';
+          data.innerText = '';
+        }
 
         const progress = document.getElementById(`progress-${ind}`);
-        progress.className = 'progress-bar-ascii';
-        progress.innerText = '[- - -]';
+        if (progress) {
+          progress.className = 'progress-bar-ascii';
+          progress.innerText = '[- - -]';
+        }
       });
-      document.getElementById('agent-inspector-panel').style.display = 'none';
-      document.getElementById('connector-pulse-bar').style.display = 'none';
+      const inspector = document.getElementById('agent-inspector-panel');
+      if (inspector) inspector.style.display = 'none';
+      const pulseBar = document.getElementById('connector-pulse-bar');
+      if (pulseBar) pulseBar.style.display = 'none';
       
       // Clear timeline trackers
       for(let i=1; i<=7; i++) {
-        document.getElementById(`timeline-step-${i}`).className = 'timeline-step-node';
+        const tStep = document.getElementById(`timeline-step-${i}`);
+        if (tStep) tStep.className = 'timeline-step-node';
       }
     }
 
     function setStageRunning(stageId) {
       const el = document.getElementById(`status-${stageId}`);
-      el.className = 'badge-status thinking';
-      el.innerHTML = '<span class="spinner"></span>Thinking';
+      if (el) {
+        el.className = 'badge-status thinking';
+        el.innerHTML = '<span class="spinner"></span>Thinking';
+      }
 
       const card = document.getElementById(`stage-${stageId}`);
-      card.className = 'mission-node-card active';
+      if (card) {
+        card.className = 'mission-node-card active';
+      }
 
       const progress = document.getElementById(`progress-${stageId}`);
-      progress.className = 'progress-bar-ascii active';
-      progress.innerText = '[██████]';
+      if (progress) {
+        progress.className = 'progress-bar-ascii active';
+        progress.innerText = '[██████]';
+      }
 
-      document.getElementById('connector-pulse-bar').style.display = 'block';
+      const pulseBar = document.getElementById('connector-pulse-bar');
+      if (pulseBar) pulseBar.style.display = 'block';
     }
 
     function setStageSuccess(stageId, detailsText) {
       const el = document.getElementById(`status-${stageId}`);
-      el.className = 'badge-status passed';
-      el.innerText = 'Complete';
+      if (el) {
+        el.className = 'badge-status passed';
+        el.innerText = 'Complete';
+      }
 
       const card = document.getElementById(`stage-${stageId}`);
-      card.className = 'mission-node-card success';
+      if (card) {
+        card.className = 'mission-node-card success';
+      }
 
       const data = document.getElementById(`data-${stageId}`);
-      data.style.display = 'block';
-      data.innerText = detailsText;
+      if (data) {
+        data.style.display = 'block';
+        data.innerText = detailsText;
+      }
 
       const progress = document.getElementById(`progress-${stageId}`);
-      progress.className = 'progress-bar-ascii done';
-      progress.innerText = '[██████]';
+      if (progress) {
+        progress.className = 'progress-bar-ascii done';
+        progress.innerText = '[██████]';
+      }
     }
 
     function setStageFailed(stageId, detailsText) {
       const el = document.getElementById(`status-${stageId}`);
-      el.className = 'badge-status failed';
-      el.innerText = 'Rejected';
+      if (el) {
+        el.className = 'badge-status failed';
+        el.innerText = 'Rejected';
+      }
 
       const card = document.getElementById(`stage-${stageId}`);
-      card.className = 'mission-node-card failed';
+      if (card) {
+        card.className = 'mission-node-card failed';
+      }
 
       const data = document.getElementById(`data-${stageId}`);
-      data.style.display = 'block';
-      data.innerText = detailsText;
+      if (data) {
+        data.style.display = 'block';
+        data.innerText = detailsText;
+      }
 
       const progress = document.getElementById(`progress-${stageId}`);
-      progress.className = 'progress-bar-ascii';
-      progress.innerText = '[✗ ✗ ✗]';
+      if (progress) {
+        progress.className = 'progress-bar-ascii';
+        progress.innerText = '[✗ ✗ ✗]';
+      }
     }
 
     // Set timeline step badge status
