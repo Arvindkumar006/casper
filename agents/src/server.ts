@@ -1,0 +1,71 @@
+import express from 'express';
+import * as path from 'path';
+import * as fs from 'fs';
+import { loadMemory } from './memory_engine';
+import { runSwarmPipeline } from './swarm_executor';
+import { auditTreasury } from './treasury_agent';
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(express.json());
+
+// Serve frontend static files
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// Fetch historical database and wallet balance
+app.get('/api/history', async (req, res) => {
+  try {
+    const memory = loadMemory();
+    
+    // Also fetch live treasury details to display current balance
+    let balanceCspr = 0;
+    let walletAddress = 'Unavailable';
+    try {
+      const treasury = await auditTreasury();
+      balanceCspr = treasury.walletBalanceCspr;
+      walletAddress = treasury.walletPublicKey;
+    } catch (err: any) {
+      console.warn(`[Server] Failed to fetch wallet balance: ${err.message}`);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        ...memory,
+        walletAddress,
+        balanceCspr
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Run active multi-agent pipeline
+app.post('/api/run', async (req, res) => {
+  try {
+    console.log('[Server] Swarm execution triggered via web console.');
+    const customAsset = req.body && Object.keys(req.body).length > 0 ? req.body : undefined;
+    const result = await runSwarmPipeline(customAsset);
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (err: any) {
+    console.error(`[Server] Swarm run failed: ${err.message}`);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Fallback to index.html for spa
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+});
+
+app.listen(PORT, () => {
+  console.log(`==================================================`);
+  console.log(`  NexusVault Console Dashboard running at:         `);
+  console.log(`  👉 http://localhost:${PORT}                      `);
+  console.log(`==================================================`);
+});

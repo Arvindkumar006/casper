@@ -1,0 +1,3 @@
+[[contracts]]
+name = "nexus_vault"
+fqn = "nexus_vault::NexusVault"

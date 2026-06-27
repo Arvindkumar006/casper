@@ -1,0 +1,25 @@
+# Node.js
+node_modules/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env
+
+# Rust
+target/
+.cargo_target_temp/
+isolated_target/
+fresh_target/
+target_check/
+Cargo.lock
+
+# Keys
+*.pem
+
+# IDEs & System
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log

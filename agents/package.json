@@ -1,0 +1,23 @@
+{
+  "name": "nexus-vault-agents",
+  "version": "1.0.0",
+  "description": "TypeScript automation scripts for Nexus Vault",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dashboard": "node dist/server.js"
+  },
+  "dependencies": {
+    "casper-js-sdk": "^2.15.7",
+    "express": "^4.19.2",
+    "framer-motion": "^12.42.0",
+    "lucide-react": "^1.21.0",
+    "recharts": "^3.9.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}
