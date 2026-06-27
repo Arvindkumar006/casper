@@ -1929,15 +1929,15 @@
       </div>
 
       <div class="sidebar-footer">
-        <div class="wallet-status">
-          <span class="lbl">CONNECTED WALLET</span>
-          <span id="sidebar-key" class="val">--</span>
+        <!-- Live Casper Wallet Widget -->
+        <div id="cw-sidebar-widget">
+          <!-- Populated by initCasperWallet() -->
         </div>
-        <div class="status-panel-indicator">
+        <div class="status-panel-indicator" style="margin-top:10px;">
           <span>Casper Network</span>
           <div class="indicator-badge">
             <div class="indicator-dot"></div>
-            <span>Connected</span>
+            <span>casper-test</span>
           </div>
         </div>
       </div>
@@ -1955,7 +1955,7 @@
           <p style="font-size:15px; color:var(--text-muted); line-height:1.6;">
             Capital allocation swarm orchestrations are executing rules-compliant transactions and settlement allocations directly on the Casper Testnet ledger.
           </p>
-          <div class="hero-ctas" style="display:flex; gap:14px; margin-top:10px;">
+          <div class="hero-ctas" style="display:flex; gap:14px; margin-top:10px; flex-wrap:wrap; align-items:center;">
             <button class="btn" onclick="openDrawer()">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <polygon points="5 3 19 12 5 21 5 3"></polygon>
@@ -1963,6 +1963,8 @@
               ▶ Start Autonomous Mission
             </button>
             <button class="btn btn-secondary" onclick="switchTab('explorer')">View Blockchain Explorer</button>
+            <!-- Inline hero wallet connect button -->
+            <div id="cw-hero-widget" style="display:inline-flex;"></div>
           </div>
         </div>
 
@@ -3661,6 +3663,7 @@
       loadStats();
       initParticles();
       initScrollReveal();
+      initCasperWallet();
     });
 
     window.addEventListener('resize', () => {
@@ -3668,6 +3671,441 @@
         drawTrendChart();
       }
     });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // CASPER WALLET ENGINE — Non-custodial, production-grade
+    // Interfaces directly with window.CasperWalletProvider (browser extension)
+    // No mocks. No hardcoded keys. Every state from real extension events.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    (function () {
+      'use strict';
+
+      // Canonical event type strings emitted by the Casper Wallet Extension
+      const CWEvents = {
+        Connected:       'casper-wallet:connected',
+        Disconnected:    'casper-wallet:disconnected',
+        ActiveKeyChanged:'casper-wallet:activeKeyChanged',
+        Locked:          'casper-wallet:locked',
+      };
+
+      // State machine: no_extension | disconnected | connecting | connected | locked | error
+      let cwStatus   = 'disconnected';
+      let cwPubKey   = null;
+      let cwProvider = null;
+
+      /** Safely get (or create) the provider singleton from the extension factory */
+      function getProvider() {
+        if (!window.CasperWalletProvider) return null;
+        if (!cwProvider) cwProvider = window.CasperWalletProvider();
+        return cwProvider;
+      }
+
+      /** Truncate a hex key for display */
+      function truncKey(k) {
+        if (!k || k.length <= 14) return k || '--';
+        return k.slice(0, 8) + '...' + k.slice(-6);
+      }
+
+      /** Render both widgets based on current state */
+      function renderWidgets() {
+        const sidebar = document.getElementById('cw-sidebar-widget');
+        const hero    = document.getElementById('cw-hero-widget');
+        if (!sidebar && !hero) return;
+
+        const html = buildWidgetHTML();
+        if (sidebar) sidebar.innerHTML = html.sidebar;
+        if (hero)    hero.innerHTML    = html.hero;
+
+        // Wire up buttons after inject
+        document.querySelectorAll('[data-cw-action="connect"]').forEach(btn => {
+          btn.addEventListener('click', cwConnect);
+        });
+        document.querySelectorAll('[data-cw-action="disconnect"]').forEach(btn => {
+          btn.addEventListener('click', cwDisconnect);
+        });
+        document.querySelectorAll('[data-cw-action="copy"]').forEach(btn => {
+          btn.addEventListener('click', () => cwPubKey && navigator.clipboard.writeText(cwPubKey));
+        });
+      }
+
+      function buildWidgetHTML() {
+        // ── no_extension ─────────────────────────────────────────────────
+        if (cwStatus === 'no_extension') {
+          return {
+            sidebar: `
+              <div class="cw-notice">
+                <span class="cw-notice-icon">⚠</span>
+                <div>
+                  <div class="cw-notice-text">Casper Wallet not detected</div>
+                  <a href="https://casperwallet.io" target="_blank" rel="noopener" class="cw-install-link">Install casperwallet.io ↗</a>
+                </div>
+              </div>`,
+            hero: `
+              <a href="https://casperwallet.io" target="_blank" rel="noopener" class="cw-btn-hero cw-btn-install">
+                Install Casper Wallet ↗
+              </a>`
+          };
+        }
+
+        // ── connected ────────────────────────────────────────────────────
+        if (cwStatus === 'connected' && cwPubKey) {
+          return {
+            sidebar: `
+              <div class="cw-connected-card">
+                <div class="cw-badge cw-badge-live">
+                  <span class="cw-dot cw-dot-pulse"></span>
+                  casper-test
+                </div>
+                <div class="cw-key-row">
+                  <code class="cw-key-display" title="${cwPubKey}">${truncKey(cwPubKey)}</code>
+                  <button class="cw-icon-btn" title="Copy full key" data-cw-action="copy">⧉</button>
+                </div>
+                <button class="cw-btn-disconnect" data-cw-action="disconnect">Disconnect</button>
+              </div>`,
+            hero: `
+              <div class="cw-hero-connected">
+                <span class="cw-dot cw-dot-pulse"></span>
+                <code style="font-size:12px; color:#e2e8f0; font-family:monospace;">${truncKey(cwPubKey)}</code>
+                <button class="cw-btn-hero cw-btn-disc-sm" data-cw-action="disconnect">✕</button>
+              </div>`
+          };
+        }
+
+        // ── connecting ───────────────────────────────────────────────────
+        if (cwStatus === 'connecting') {
+          return {
+            sidebar: `
+              <div class="cw-spinner-row">
+                <div class="cw-spinner"></div>
+                <span class="cw-hint">Awaiting approval…</span>
+              </div>`,
+            hero: `
+              <div class="cw-spinner-row">
+                <div class="cw-spinner"></div>
+                <span style="font-size:12px; color:#64748b;">Awaiting wallet…</span>
+              </div>`
+          };
+        }
+
+        // ── locked ───────────────────────────────────────────────────────
+        if (cwStatus === 'locked') {
+          return {
+            sidebar: `
+              <div class="cw-col">
+                <div class="cw-badge cw-badge-locked">
+                  <span class="cw-dot cw-dot-amber"></span>
+                  Wallet Locked
+                </div>
+                <button class="cw-btn-connect" data-cw-action="connect">
+                  <span>🔑</span> Unlock &amp; Connect
+                </button>
+              </div>`,
+            hero: `
+              <button class="cw-btn-hero" data-cw-action="connect">
+                🔑 Unlock &amp; Connect
+              </button>`
+          };
+        }
+
+        // ── disconnected / error ─────────────────────────────────────────
+        const errMsg = cwStatus === 'error' ? cwPubKey : null; // reuse field for error msg
+        return {
+          sidebar: `
+            <div class="cw-col">
+              ${errMsg ? `<div class="cw-error-box">⚠ ${errMsg}</div>` : ''}
+              <button class="cw-btn-connect" data-cw-action="connect">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/>
+                  <path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/>
+                </svg>
+                Connect Wallet
+              </button>
+            </div>`,
+          hero: `
+            <button class="cw-btn-hero" data-cw-action="connect">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;">
+                <path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/>
+                <path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/>
+              </svg>
+              Connect Wallet
+            </button>`
+        };
+      }
+
+      /** setState helper — update state and re-render */
+      function setState(status, pubKey) {
+        cwStatus = status;
+        cwPubKey = pubKey || null;
+        renderWidgets();
+        // Sync legacy sidebar-key span if present
+        const legacyKey = document.getElementById('sidebar-key');
+        if (legacyKey) legacyKey.textContent = (status === 'connected' && pubKey) ? truncKey(pubKey) : '--';
+      }
+
+      // ── Actions ────────────────────────────────────────────────────────
+      async function cwConnect() {
+        const provider = getProvider();
+        if (!provider) return;
+        setState('connecting', null);
+        try {
+          const approved = await provider.connect();
+          if (!approved) {
+            setState('error', 'Connection cancelled.');
+          }
+          // casper-wallet:connected event fires → onConnected() handles state
+        } catch (err) {
+          setState('error', err && err.message ? err.message : 'Connection failed.');
+        }
+      }
+
+      async function cwDisconnect() {
+        const provider = getProvider();
+        try { if (provider) await provider.disconnect(); } catch (_) {}
+        setState('disconnected', null);
+      }
+
+      // ── Native Extension Event Handlers ────────────────────────────────
+      async function onConnected(e) {
+        try {
+          const provider = getProvider();
+          const detail   = e && e.detail;
+          const pubKey   = (detail && detail.activeKey)
+                         || (provider && await provider.getActivePublicKey());
+          setState('connected', pubKey);
+        } catch (err) {
+          setState('error', err && err.message ? err.message : 'Failed to read key.');
+        }
+      }
+
+      async function onActiveKeyChanged(e) {
+        try {
+          const provider = getProvider();
+          const detail   = e && e.detail;
+          const pubKey   = (detail && detail.activeKey)
+                         || (provider && await provider.getActivePublicKey());
+          setState('connected', pubKey);
+        } catch (_) {}
+      }
+
+      function onDisconnected() { setState('disconnected', null); }
+      function onLocked()       { setState('locked', null); }
+
+      // ── Initializer (called on DOMContentLoaded) ───────────────────────
+      window.initCasperWallet = async function () {
+        // Inject widget CSS once
+        if (!document.getElementById('cw-styles')) {
+          const style = document.createElement('style');
+          style.id = 'cw-styles';
+          style.textContent = CW_CSS;
+          document.head.appendChild(style);
+        }
+
+        // Give the browser 150ms for the extension to inject itself
+        await new Promise(r => setTimeout(r, 150));
+
+        const provider = getProvider();
+
+        if (!provider) {
+          setState('no_extension', null);
+          return;
+        }
+
+        // Register native event listeners
+        window.addEventListener(CWEvents.Connected,        onConnected);
+        window.addEventListener(CWEvents.Disconnected,     onDisconnected);
+        window.addEventListener(CWEvents.ActiveKeyChanged, onActiveKeyChanged);
+        window.addEventListener(CWEvents.Locked,           onLocked);
+
+        // Check for an already-authorized session
+        try {
+          const already = await provider.isConnected();
+          if (already) {
+            const pubKey = await provider.getActivePublicKey();
+            setState('connected', pubKey);
+          } else {
+            setState('disconnected', null);
+          }
+        } catch (_) {
+          setState('locked', null);
+        }
+      };
+
+      // ── Scoped CSS for all wallet widgets ─────────────────────────────
+      const CW_CSS = `
+        /* Wallet widget shared layout */
+        .cw-col { display:flex; flex-direction:column; gap:8px; }
+        .cw-spinner-row { display:flex; align-items:center; gap:8px; padding:8px 0; }
+
+        /* Spinner */
+        .cw-spinner {
+          width:18px; height:18px; flex-shrink:0;
+          border:2px solid rgba(99,102,241,0.2);
+          border-top-color:#818cf8;
+          border-radius:50%;
+          animation:cw-spin 0.75s linear infinite;
+        }
+        @keyframes cw-spin { to { transform:rotate(360deg); } }
+        .cw-hint { font-size:11px; color:#64748b; font-family:monospace; }
+
+        /* Notice (no extension) */
+        .cw-notice {
+          display:flex; align-items:flex-start; gap:8px;
+          background:rgba(251,113,133,0.06);
+          border:1px solid rgba(251,113,133,0.2);
+          border-radius:10px; padding:10px 12px;
+        }
+        .cw-notice-icon { color:#fb7185; font-size:14px; margin-top:1px; }
+        .cw-notice-text { font-size:11px; color:#e2e8f0; margin-bottom:4px; }
+        .cw-install-link {
+          font-size:11px; font-weight:600; color:#60a5fa;
+          text-decoration:none; display:block;
+        }
+        .cw-install-link:hover { color:#93c5fd; }
+
+        /* Error box */
+        .cw-error-box {
+          background:rgba(251,113,133,0.07);
+          border:1px solid rgba(251,113,133,0.2);
+          border-radius:8px; padding:7px 10px;
+          color:#fb7185; font-size:11px; line-height:1.5;
+        }
+
+        /* Badge */
+        .cw-badge {
+          display:inline-flex; align-items:center; gap:5px;
+          border-radius:999px; font-size:10px; font-weight:700;
+          letter-spacing:0.06em; text-transform:uppercase;
+          padding:3px 9px; width:fit-content;
+        }
+        .cw-badge-live {
+          background:rgba(16,185,129,0.1);
+          border:1px solid rgba(16,185,129,0.25);
+          color:#34d399;
+        }
+        .cw-badge-locked {
+          background:rgba(251,191,36,0.08);
+          border:1px solid rgba(251,191,36,0.2);
+          color:#fbbf24;
+        }
+
+        /* Dots */
+        .cw-dot {
+          display:inline-block; width:6px; height:6px;
+          border-radius:50%; flex-shrink:0;
+          background:#10b981;
+        }
+        .cw-dot-amber { background:#f59e0b; }
+        .cw-dot-pulse { animation:cw-pulse 2s ease-in-out infinite; }
+        @keyframes cw-pulse {
+          0%,100%{ opacity:1; transform:scale(1); }
+          50%    { opacity:0.35; transform:scale(0.7); }
+        }
+
+        /* Connected card (sidebar) */
+        .cw-connected-card {
+          display:flex; flex-direction:column; gap:8px;
+          background:rgba(15,23,42,0.7);
+          border:1px solid rgba(99,102,241,0.2);
+          border-radius:12px; padding:12px 14px;
+          backdrop-filter:blur(10px);
+        }
+
+        /* Key row */
+        .cw-key-row {
+          display:flex; align-items:center; gap:6px;
+          background:rgba(0,0,0,0.2);
+          border:1px solid rgba(255,255,255,0.06);
+          border-radius:7px; padding:7px 9px;
+        }
+        .cw-key-display {
+          flex:1; font-family:'JetBrains Mono','Fira Code',monospace;
+          font-size:12px; color:#e2e8f0;
+          overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+          user-select:all;
+        }
+        .cw-icon-btn {
+          background:none; border:none; cursor:pointer;
+          color:#64748b; font-size:13px; padding:2px 3px;
+          border-radius:4px; transition:color 0.15s; flex-shrink:0;
+        }
+        .cw-icon-btn:hover { color:#94a3b8; }
+
+        /* Connect button (sidebar) */
+        .cw-btn-connect {
+          display:inline-flex; align-items:center; gap:7px;
+          background:linear-gradient(135deg,#4f46e5,#7c3aed);
+          color:#fff; border:none; cursor:pointer;
+          font-family:'Inter',sans-serif; font-size:12px; font-weight:600;
+          letter-spacing:0.02em; border-radius:9px;
+          padding:9px 16px; width:100%;
+          transition:all 0.2s ease;
+          box-shadow:0 0 0 0 rgba(124,58,237,0);
+        }
+        .cw-btn-connect:hover {
+          transform:translateY(-1px);
+          box-shadow:0 6px 20px rgba(124,58,237,0.35);
+        }
+
+        /* Disconnect button (sidebar) */
+        .cw-btn-disconnect {
+          background:rgba(255,255,255,0.04);
+          border:1px solid rgba(255,255,255,0.09);
+          color:#94a3b8; cursor:pointer;
+          font-family:'Inter',sans-serif; font-size:11px;
+          border-radius:7px; padding:5px 10px;
+          align-self:flex-end; transition:all 0.15s;
+        }
+        .cw-btn-disconnect:hover {
+          background:rgba(251,113,133,0.08);
+          border-color:rgba(251,113,133,0.3);
+          color:#fb7185;
+        }
+
+        /* Hero wallet button */
+        .cw-btn-hero {
+          display:inline-flex; align-items:center; gap:6px;
+          background:rgba(99,102,241,0.12);
+          border:1px solid rgba(99,102,241,0.35);
+          color:#a5b4fc; cursor:pointer;
+          font-family:'Inter',sans-serif; font-size:13px; font-weight:600;
+          letter-spacing:0.02em; border-radius:10px;
+          padding:10px 18px; transition:all 0.2s ease;
+          white-space:nowrap;
+        }
+        .cw-btn-hero:hover {
+          background:rgba(99,102,241,0.22);
+          border-color:rgba(99,102,241,0.6);
+          color:#c7d2fe;
+          transform:translateY(-1px);
+        }
+        .cw-btn-install {
+          background:rgba(251,113,133,0.08);
+          border-color:rgba(251,113,133,0.3);
+          color:#fb7185;
+          text-decoration:none;
+        }
+        .cw-btn-install:hover {
+          background:rgba(251,113,133,0.15);
+          border-color:rgba(251,113,133,0.5);
+          color:#fda4af;
+        }
+        .cw-btn-disc-sm {
+          padding:4px 8px; font-size:12px;
+          border-color:rgba(251,113,133,0.2);
+          color:#fb7185; background:rgba(251,113,133,0.05);
+        }
+
+        /* Hero connected inline row */
+        .cw-hero-connected {
+          display:inline-flex; align-items:center; gap:8px;
+          background:rgba(16,185,129,0.08);
+          border:1px solid rgba(16,185,129,0.2);
+          border-radius:10px; padding:8px 14px;
+        }
+      `;
+    })();
+
   </script>
 </body>
 </html>
