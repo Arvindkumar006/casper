@@ -88,14 +88,24 @@ function useCasperWallet() {
   // Stable ref so event listeners always close over the latest provider.
   const providerRef = useRef<CasperWalletProvider | null>(null);
 
-  /** Safely instantiate the provider from the global class. */
+  /** Safely instantiate the provider from the global object. */
   const getProvider = useCallback((): CasperWalletProvider | null => {
     if (typeof window === "undefined" || !window.CasperWalletProvider) {
       return null;
     }
     if (!providerRef.current) {
-      // The extension exports a class constructor — instantiate with new.
-      providerRef.current = new window.CasperWalletProvider();
+      try {
+        // @ts-ignore
+        providerRef.current = window.CasperWalletProvider();
+      } catch (_) {
+        try {
+          // @ts-ignore
+          providerRef.current = new window.CasperWalletProvider();
+        } catch (_) {
+          // @ts-ignore
+          providerRef.current = window.CasperWalletProvider;
+        }
+      }
     }
     return providerRef.current;
   }, []);

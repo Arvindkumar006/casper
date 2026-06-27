@@ -3694,10 +3694,20 @@
       let cwPubKey   = null;
       let cwProvider = null;
 
-      /** Safely get (or create) the provider singleton from the extension class */
+      /** Safely get (or create) the provider singleton from the extension */
       function getProvider() {
         if (!window.CasperWalletProvider) return null;
-        if (!cwProvider) cwProvider = new window.CasperWalletProvider();
+        if (!cwProvider) {
+          try {
+            cwProvider = window.CasperWalletProvider();
+          } catch (_) {
+            try {
+              cwProvider = new window.CasperWalletProvider();
+            } catch (_) {
+              cwProvider = window.CasperWalletProvider;
+            }
+          }
+        }
         return cwProvider;
       }
 
