@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { CasperServiceByJsonRPC, CLPublicKey } from 'casper-js-sdk';
 
-// Inline default memory data for serverless environment (no filesystem)
 const DEFAULT_MEMORY = {
   totalRuns: 12,
   successfulDeploys: 3,
@@ -41,37 +41,41 @@ const DEFAULT_MEMORY = {
 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Allow CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
   try {
-    // Attempt to fetch live treasury balance from Casper Testnet
     let balanceCspr = 2924;
-    let walletAddress = '013E2fA9cadCfcD097e02820025B24...';
+    let walletAddress = (req.query.address as string) || '013e2fa9cad2d80d28362b1a206a461e71e72e12b7a461e71e72e12b7a461e71e7';
 
     try {
-      const { CasperServiceByJsonRPC, Keys } = await import('casper-js-sdk');
       const NODE_RPC_URL = 'https://node.testnet.casper.network/rpc';
-      const PUBLIC_KEY_HEX = '013E2fA9cadCfcD097e028200258241234567890abcdef1234567890abcdef1234567890';
-
       const rpcService = new CasperServiceByJsonRPC(NODE_RPC_URL);
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('RPC timeout')), 5000)
-      );
+      const clPubKey = CLPublicKey.fromHex(walletAddress);
 
       const fetchPromise = (async () => {
         const stateRootHash = await rpcService.getStateRootHash();
-        return { stateRootHash, balanceCspr: 2924 };
+        const balanceUref = await rpcService.getAccountBalanceUrefByPublicKey(stateRootHash, clPubKey);
+        const balanceBigNumber = await rpcService.getAccountBalance(stateRootHash, balanceUref);
+        const balanceMotes = BigInt(balanceBigNumber.toString());
+        return Number(balanceMotes / 1_000_000_000n);
       })();
 
-      await Promise.race([fetchPromise, timeoutPromise]);
-    } catch (_err) {
-      // Fallback to known balance
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('RPC timeout')), 4000)
+      );
+
+      const fetchedBalance = await Promise.race([fetchPromise, timeoutPromise]);
+      if (typeof fetchedBalance === 'number') {
+        balanceCspr = fetchedBalance;
+      }
+    } catch (err: any) {
+      console.warn(`[Vercel Serverless] Failed to query live balance from Casper node: ${err.message}`);
     }
 
     return res.status(200).json({

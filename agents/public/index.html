@@ -3396,15 +3396,34 @@
     // Refresh state
     async function loadStats() {
       try {
-        const res = await fetch(`${API_URL}/history`);
+        const address = localStorage.getItem('wallet_address') || '';
+        const url = address ? `${API_URL}/history?address=${address}` : `${API_URL}/history`;
+        const res = await fetch(url);
         const result = await res.json();
         if (result.success) {
           globalHistory = result.data;
           
+          // Merge local runs (persisted in localStorage for Vercel session)
+          const localRunsRaw = localStorage.getItem('nexus_local_runs');
+          if (localRunsRaw) {
+            const localRuns = JSON.parse(localRunsRaw);
+            localRuns.forEach(run => {
+              if (!globalHistory.historicalAssets.find(h => h.timestamp === run.timestamp && h.assetId === run.assetId)) {
+                globalHistory.historicalAssets.push(run);
+                globalHistory.totalRuns += 1;
+                if (run.approved) {
+                  globalHistory.successfulDeploys += 1;
+                }
+              }
+            });
+          }
+          
           // Sidebar connected Key (Legacy element fallback)
-          const shortKey = globalHistory.walletAddress 
-            ? `${globalHistory.walletAddress.substring(0, 8)}...${globalHistory.walletAddress.substring(globalHistory.walletAddress.length - 6)}`
-            : '--';
+          const shortKey = address 
+            ? `${address.substring(0, 8)}...${address.substring(address.length - 6)}`
+            : (globalHistory.walletAddress 
+              ? `${globalHistory.walletAddress.substring(0, 8)}...${globalHistory.walletAddress.substring(globalHistory.walletAddress.length - 6)}`
+              : '--');
           const sidebarKeyEl = document.getElementById('sidebar-key');
           if (sidebarKeyEl) {
             sidebarKeyEl.innerText = shortKey;
@@ -4468,6 +4487,22 @@
 
         addTimelineMsg("Swarm run finished. Dynamic modifiers logged to history registers.", 'info');
         
+        // Persist run details locally to client session if run completed successfully
+        if (run && run.memory) {
+          const newLocalRun = {
+            assetId: run.memory.assetId,
+            timestamp: Date.now(),
+            approved: run.memory.approved,
+            riskIndex: run.memory.riskIndex,
+            amountCspr: run.memory.amountCspr,
+            deployHash: run.memory.deployHash
+          };
+          const localRunsRaw = localStorage.getItem('nexus_local_runs');
+          const localRuns = localRunsRaw ? JSON.parse(localRunsRaw) : [];
+          localRuns.push(newLocalRun);
+          localStorage.setItem('nexus_local_runs', JSON.stringify(localRuns));
+        }
+
         // Refresh State
         await loadStats();
       } catch (err) {
