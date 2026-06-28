@@ -3295,6 +3295,8 @@
           </div>
         `;
       }
+      // Reload stats with new address balance
+      loadStats();
     }
 
     async function cwDisconnect() {
@@ -3384,7 +3386,7 @@
     async function loadStats() {
       try {
         const address = localStorage.getItem('wallet_address') || '';
-        const url = address ? `${API_URL}/history?address=${address}` : `${API_URL}/history`;
+        const url = address ? `${API_URL}/history?address=${address}&_=${Date.now()}` : `${API_URL}/history?_=${Date.now()}`;
         const res = await fetch(url);
         const result = await res.json();
         if (result.success) {
