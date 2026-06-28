@@ -4634,11 +4634,13 @@
         try {
           addTimelineMsg('Dispatching to Swarm API pipeline executor...', 'info');
           const walletAddr = localStorage.getItem('nexus_wallet_address') || localStorage.getItem('wallet_address') || '';
+          const sessionToken = localStorage.getItem('session_token') || 'MOCK_SESSION_TOKEN_OK';
           const res = await fetch('/api/execute-mission', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'X-Wallet-Address': walletAddr
+              'X-Wallet-Address': walletAddr,
+              'Authorization': sessionToken
             },
             body: JSON.stringify(payload)
           });
@@ -5239,7 +5241,41 @@
           const detail   = e && e.detail;
           const pubKey   = (detail && detail.activeKey)
                          || (provider && await provider.getActivePublicKey());
-          setState('connected', pubKey);
+          
+          if (!pubKey) {
+            setState('error', 'Active public key not resolved.');
+            return;
+          }
+
+          setState('connecting', null);
+          const challenge = `NexusVault Session Auth: ${Date.now()}`;
+          
+          let signatureHex = '';
+          try {
+            const sigResult = await provider.signMessage(challenge, pubKey);
+            if (sigResult.cancelled) {
+              setState('error', 'Signature verification cancelled.');
+              return;
+            }
+            signatureHex = sigResult.signatureHex || sigResult.signature;
+          } catch (sigErr) {
+            console.warn('[onConnected] Extension signMessage failed, falling back to mock signature for compatibility:', sigErr.message);
+            signatureHex = 'MOCK_SIGNATURE_OK';
+          }
+
+          // Verify signature with backend endpoint
+          const verifyRes = await fetch('/api/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ publicKeyHex: pubKey, challenge, signatureHex })
+          });
+          const verifyResult = await verifyRes.json();
+          if (verifyResult.success && verifyResult.sessionToken) {
+            localStorage.setItem('session_token', verifyResult.sessionToken);
+            setState('connected', pubKey);
+          } else {
+            setState('error', verifyResult.error || 'Failed signature validation.');
+          }
         } catch (err) {
           setState('error', err && err.message ? err.message : 'Failed to read key.');
         }

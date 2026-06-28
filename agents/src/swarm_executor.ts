@@ -77,7 +77,13 @@ export function getOrCreateKeyPair(): Keys.AsymmetricKey {
 /**
  * Broadcasts the deploy_capital session call to the NexusVault contract on Casper Testnet.
  */
-async function executeContractCall(assetId: string, amountMotes: string, keyPair: Keys.AsymmetricKey): Promise<string> {
+async function executeContractCall(
+  assetId: string,
+  amountMotes: string,
+  valuation: number,
+  riskScore: number,
+  keyPair: Keys.AsymmetricKey
+): Promise<string> {
   const publicKey = keyPair.publicKey;
   const client = new CasperClient(NODE_RPC_URL);
 
@@ -85,6 +91,8 @@ async function executeContractCall(assetId: string, amountMotes: string, keyPair
   const args = RuntimeArgs.fromMap({
     asset_id: CLValueBuilder.string(assetId),
     amount: CLValueBuilder.u256(amountMotes),
+    valuation: CLValueBuilder.u256(valuation),
+    risk_score: CLValueBuilder.u256(riskScore),
   });
 
   // Decode the hex hash into bytes (removing prefix if present)
@@ -264,7 +272,14 @@ export async function runSwarmPipeline(customAsset?: Partial<RwaAssetData>): Pro
     );
   } else {
     try {
-      const deployHash = await executeContractCall(oracleData.assetId, riskData.amount, keyPair);
+      const scaledRisk = Math.round(riskData.riskIndex * 1000);
+      const deployHash = await executeContractCall(
+        oracleData.assetId,
+        riskData.amount,
+        oracleData.valuation,
+        scaledRisk,
+        keyPair
+      );
       executionResult = {
         step: '5',
         name: 'Swarm Capital Deployment',

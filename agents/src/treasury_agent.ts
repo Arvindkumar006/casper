@@ -3,6 +3,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 
+import { loadMemory, saveMemory } from './memory_engine';
+
 // ── Configuration Layer ────────────────────────────────────────────────────
 const complianceConfig = require(path.join(__dirname, '..', 'config', 'compliance.json'));
 
@@ -76,39 +78,71 @@ export async function auditTreasury(
     }
   }
 
-  // ── Live RPC Query ────────────────────────────────────────────────────────
-  let balanceMotesStr = FALLBACK_BALANCE_MOTES;
+  // ── Live RPC Query with Node Rotation ─────────────────────────────────────
+  let balanceMotesStr = '';
   let isFallback = false;
+  let success = false;
 
   if (publicKey) {
-    try {
-      console.log(`[Treasury Agent] Querying live balance from Casper Testnet RPC: ${nodeRpcUrl}`);
-      const rpcService = new CasperServiceByJsonRPC(nodeRpcUrl);
+    const rpcList = [
+      nodeRpcUrl,
+      'https://rpc.testnet.casper.network',
+      'https://testnet-node.casper.network/rpc',
+      'https://testnet-rpc.cspr.live/rpc'
+    ];
 
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`Casper RPC timed out after ${RPC_TIMEOUT_MS}ms`)), RPC_TIMEOUT_MS)
-      );
+    for (const rpcUrl of rpcList) {
+      try {
+        console.log(`[Treasury Agent] Querying live balance from Casper Testnet RPC: ${rpcUrl}`);
+        const rpcService = new CasperServiceByJsonRPC(rpcUrl);
 
-      const fetchPromise = (async () => {
-        const stateRootHash = await rpcService.getStateRootHash();
-        const balanceUref  = await rpcService.getAccountBalanceUrefByPublicKey(stateRootHash, publicKey!);
-        const balanceBig   = await rpcService.getAccountBalance(stateRootHash, balanceUref);
-        return balanceBig.toString();
-      })();
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Casper RPC timed out after ${RPC_TIMEOUT_MS}ms`)), RPC_TIMEOUT_MS)
+        );
 
-      balanceMotesStr = await Promise.race([fetchPromise, timeoutPromise]);
-      console.log(`[Treasury Agent] Live balance: ${balanceMotesStr} motes`);
-    } catch (err: any) {
-      console.error(
-        `[Treasury Agent] RPC query failed: ${err.message}. ` +
-        `Using config fallback balance of ${FALLBACK_BALANCE_MOTES} motes.`
-      );
-      isFallback = true;
-      balanceMotesStr = FALLBACK_BALANCE_MOTES;
+        const fetchPromise = (async () => {
+          const stateRootHash = await rpcService.getStateRootHash();
+          const balanceUref  = await rpcService.getAccountBalanceUrefByPublicKey(stateRootHash, publicKey!);
+          const balanceBig   = await rpcService.getAccountBalance(stateRootHash, balanceUref);
+          return balanceBig.toString();
+        })();
+
+        balanceMotesStr = await Promise.race([fetchPromise, timeoutPromise]);
+        console.log(`[Treasury Agent] Live balance: ${balanceMotesStr} motes from RPC: ${rpcUrl}`);
+        success = true;
+
+        // Cache successful balance in memory database
+        try {
+          const memory = loadMemory();
+          (memory as any).cachedBalanceMotes = balanceMotesStr;
+          saveMemory(memory);
+        } catch (cacheErr: any) {
+          console.warn(`[Treasury Agent] Failed to update cached balance: ${cacheErr.message}`);
+        }
+        break;
+      } catch (err: any) {
+        console.warn(`[Treasury Agent] Failed querying RPC ${rpcUrl}: ${err.message}`);
+      }
     }
-  } else {
+  }
+
+  if (!success) {
     isFallback = true;
-    console.warn(`[Treasury Agent] No public key available. Using config fallback balance of ${FALLBACK_BALANCE_MOTES} motes.`);
+    // Attempt fallback from memory database cache first
+    try {
+      const memory = loadMemory();
+      const cached = (memory as any).cachedBalanceMotes;
+      if (cached) {
+        balanceMotesStr = cached;
+        console.log(`[Treasury Agent] All RPC queries failed. Fell back to cached balance: ${balanceMotesStr} motes`);
+      } else {
+        balanceMotesStr = FALLBACK_BALANCE_MOTES;
+        console.log(`[Treasury Agent] All RPC queries failed & no cache. Fell back to config balance: ${balanceMotesStr} motes`);
+      }
+    } catch (_) {
+      balanceMotesStr = FALLBACK_BALANCE_MOTES;
+      console.log(`[Treasury Agent] Fallback cache read failed. Fell back to config balance: ${balanceMotesStr} motes`);
+    }
   }
 
   // ── Allocation Calculation ────────────────────────────────────────────────
