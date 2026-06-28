@@ -2994,6 +2994,8 @@
     };
 
     function loadMemoryState() {
+      // If globalHistory is already hydrated from the API, return it directly
+      if (globalHistory && globalHistory.historicalAssets) return globalHistory;
       let stateRaw = localStorage.getItem('nexus_vault_state');
       if (!stateRaw) {
         stateRaw = JSON.stringify(SEED_HISTORY);
@@ -3514,82 +3516,125 @@
     }
 
     async function loadStats() {
+      const address = localStorage.getItem('wallet_address') || '';
+      const rpcStatus = document.getElementById('kpi-rpc-status');
+
       try {
-        const address = localStorage.getItem('wallet_address') || '';
+        // ── PRIMARY: Hit the serverless API for live server-state + RPC balance ──
+        const apiUrl = address
+          ? `/api/swarm-state?address=${encodeURIComponent(address)}&_=${Date.now()}`
+          : `/api/swarm-state?_=${Date.now()}`;
+
+        const res = await fetch(apiUrl);
+        const result = await res.json();
+
+        if (result.success && result.data) {
+          const apiData = result.data;
+
+          // Merge: take API server-state as the base, then layer in any local runs
+          // that happened within this browser session that the server doesn't know about
+          const localRaw = localStorage.getItem('nexus_vault_state');
+          const localData = localRaw ? JSON.parse(localRaw) : null;
+
+          if (localData && localData.historicalAssets) {
+            localData.historicalAssets.forEach(localRun => {
+              const alreadyInApi = apiData.historicalAssets.find(
+                a => a.assetId === localRun.assetId && Math.abs(a.timestamp - localRun.timestamp) < 5000
+              );
+              if (!alreadyInApi) {
+                apiData.historicalAssets.push(localRun);
+              }
+            });
+            // Recalculate counters to reflect merged state
+            apiData.totalRuns = Math.max(apiData.totalRuns, localData.totalRuns);
+            apiData.successfulDeploys = Math.max(apiData.successfulDeploys, localData.successfulDeploys);
+            apiData.confidenceScore = localData.confidenceScore;
+          }
+
+          globalHistory = apiData;
+          // Write merged state back to localStorage so client-side reads stay in sync
+          localStorage.setItem('nexus_vault_state', JSON.stringify(globalHistory));
+
+          // RPC status from server
+          if (rpcStatus) {
+            rpcStatus.innerText = apiData.rpcOnline !== false ? 'CONNECTED' : 'OFFLINE';
+            rpcStatus.style.color = apiData.rpcOnline !== false ? 'var(--emerald)' : 'var(--rose)';
+          }
+        } else {
+          throw new Error('API returned failure');
+        }
+      } catch (apiErr) {
+        // ── FALLBACK: API unreachable (cold-start, network) → use localStorage ──
+        console.warn('[loadStats] API unavailable, falling back to localStorage:', apiErr.message);
         globalHistory = loadMemoryState();
 
-        let balanceCspr = 2924;
-        let rpcOnline = true;
-        const rpcStatus = document.getElementById('kpi-rpc-status');
+        // Still try a direct RPC balance query from the browser
         try {
-          balanceCspr = await queryCasperRpcBalance(address);
-          if (rpcStatus) {
-            rpcStatus.innerText = 'CONNECTED';
-            rpcStatus.style.color = 'var(--emerald)';
-          }
-        } catch (rpcErr) {
-          console.warn("Direct RPC query failed, using fallback:", rpcErr);
-          rpcOnline = false;
-          if (rpcStatus) {
-            rpcStatus.innerText = 'OFFLINE';
-            rpcStatus.style.color = 'var(--rose)';
-          }
+          const balanceCspr = await queryCasperRpcBalance(address);
+          globalHistory.balanceCspr = balanceCspr;
+          if (rpcStatus) { rpcStatus.innerText = 'CONNECTED'; rpcStatus.style.color = 'var(--emerald)'; }
+        } catch (_) {
+          globalHistory.balanceCspr = globalHistory.balanceCspr || 2924;
+          if (rpcStatus) { rpcStatus.innerText = 'OFFLINE'; rpcStatus.style.color = 'var(--rose)'; }
         }
-
-        globalHistory.balanceCspr = balanceCspr;
-        globalHistory.walletAddress = address || '013e2fa9cad2d80d28362b1a206a461e71e72e12b7a461e71e72e12b7a461e71e7';
-
-        // Sidebar connected Key (Legacy element fallback)
-        const shortKey = address 
-          ? `${address.substring(0, 8)}...${address.substring(address.length - 6)}`
-          : (globalHistory.walletAddress 
-            ? `${globalHistory.walletAddress.substring(0, 8)}...${globalHistory.walletAddress.substring(globalHistory.walletAddress.length - 6)}`
-            : '--');
-        const sidebarKeyEl = document.getElementById('sidebar-key');
-        if (sidebarKeyEl) {
-          sidebarKeyEl.innerText = shortKey;
-        }
-
-        // Update Landing Page static runs counter
-        const lMetricRuns = document.getElementById('landing-metric-runs');
-        if (lMetricRuns) {
-          lMetricRuns.innerText = globalHistory.totalRuns;
-        }
-
-        // KPI indicators
-        document.getElementById('kpi-confidence').innerText = `${globalHistory.confidenceScore}%`;
-        const cBadge = document.getElementById('kpi-confidence-status');
-        if (cBadge) {
-          cBadge.innerText = globalHistory.confidenceScore >= 70 ? 'STABLE' : 'ADAPTED';
-          cBadge.className = `kpi-badge ${globalHistory.confidenceScore >= 70 ? 'stable' : 'adapted'}`;
-        }
-
-        document.getElementById('kpi-balance').innerText = globalHistory.balanceCspr.toLocaleString();
-        document.getElementById('kpi-runs').innerText = globalHistory.totalRuns;
-        
-        const rejects = globalHistory.totalRuns - globalHistory.successfulDeploys;
-        document.getElementById('kpi-ratio').innerHTML = `<span style="color:var(--emerald)">${globalHistory.successfulDeploys}</span><span style="color:var(--text-dim)">/</span><span style="color:var(--rose)">${rejects}</span>`;
-
-        const capital = globalHistory.historicalAssets
-          .filter(asset => asset.approved && asset.deployHash)
-          .reduce((sum, asset) => sum + asset.amountCspr, 0);
-        document.getElementById('kpi-capital').innerText = capital.toLocaleString();
-
-        document.getElementById('memory-confidence-val').innerText = `${globalHistory.confidenceScore} / 100`;
-
-        // Set latest block finalization base height
-        const mockBlockBase = 482912;
-        document.getElementById('block-height-val').innerText = mockBlockBase + globalHistory.totalRuns;
-
-        // Renders
-        renderActivitySummary();
-        renderPortfolioCards();
-        renderExplorerLogs();
-        renderActiveUnderwritingReport();
-
-      } catch (err) {
-        console.error("Failed to load history metrics:", err);
       }
+
+      // ── RENDER: Bind all KPI elements from the now-resolved globalHistory ──
+      const gh = globalHistory;
+      if (!gh) return;
+
+      // Sidebar wallet key
+      const walletAddr = address || gh.walletAddress || '';
+      const shortKey = walletAddr.length > 14
+        ? `${walletAddr.substring(0, 8)}...${walletAddr.substring(walletAddr.length - 6)}`
+        : (walletAddr || '--');
+      const sidebarKeyEl = document.getElementById('sidebar-key');
+      if (sidebarKeyEl) {
+        sidebarKeyEl.innerText = shortKey;
+      }
+
+      // Landing counter
+      const lMetricRuns = document.getElementById('landing-metric-runs');
+      if (lMetricRuns) {
+        lMetricRuns.innerText = gh.totalRuns;
+      }
+
+      // KPI cards
+      const kpiConf = document.getElementById('kpi-confidence');
+      if (kpiConf) kpiConf.innerText = `${gh.confidenceScore}%`;
+      const cBadge = document.getElementById('kpi-confidence-status');
+      if (cBadge) {
+        cBadge.innerText = gh.confidenceScore >= 70 ? 'STABLE' : 'ADAPTED';
+        cBadge.className = `kpi-badge ${gh.confidenceScore >= 70 ? 'stable' : 'adapted'}`;
+      }
+
+      const kpiBal = document.getElementById('kpi-balance');
+      if (kpiBal) kpiBal.innerText = (gh.balanceCspr || 2924).toLocaleString();
+
+      const kpiRuns = document.getElementById('kpi-runs');
+      if (kpiRuns) kpiRuns.innerText = gh.totalRuns;
+
+      const rejects = gh.totalRuns - gh.successfulDeploys;
+      const kpiRatio = document.getElementById('kpi-ratio');
+      if (kpiRatio) kpiRatio.innerHTML = `<span style="color:var(--emerald)">${gh.successfulDeploys}</span><span style="color:var(--text-dim)">/</span><span style="color:var(--rose)">${rejects}</span>`;
+
+      const capital = (gh.historicalAssets || [])
+        .filter(a => a.approved && a.deployHash)
+        .reduce((sum, a) => sum + (a.amountCspr || 0), 0);
+      const kpiCap = document.getElementById('kpi-capital');
+      if (kpiCap) kpiCap.innerText = capital.toLocaleString();
+
+      const memConf = document.getElementById('memory-confidence-val');
+      if (memConf) memConf.innerText = `${gh.confidenceScore} / 100`;
+
+      const blockHeight = document.getElementById('block-height-val');
+      if (blockHeight) blockHeight.innerText = 482912 + gh.totalRuns;
+
+      // Sub-renders
+      renderActivitySummary();
+      renderPortfolioCards();
+      renderExplorerLogs();
+      renderActiveUnderwritingReport();
     }
 
     function renderActivitySummary() {
@@ -3610,13 +3655,15 @@
         item.style.borderBottom = '1px solid rgba(255,255,255,0.02)';
         item.style.paddingBottom = '8px';
 
+        // BUG-GUARD: strict fallback prevents "undefined" from printing if key is missing
+        const displayId = asset.assetId || asset.assetName || 'Unknown Asset';
         const statusLabel = asset.approved 
-          ? `<span style="color:var(--emerald); font-weight:700;">APPROVED & ALLOCATED (${asset.amountCspr} CSPR)</span>`
+          ? `<span style="color:var(--emerald); font-weight:700;">APPROVED & ALLOCATED (${asset.amountCspr || 0} CSPR)</span>`
           : `<span style="color:var(--rose); font-weight:700;">REJECTED</span>`;
 
         item.innerHTML = `
           <div>
-            <span style="font-weight:700; color:#ffffff; font-family:monospace; margin-right:8px;">${asset.assetId}</span>
+            <span style="font-weight:700; color:#ffffff; font-family:monospace; margin-right:8px;">${displayId}</span>
             <span style="color:var(--text-dim); font-family:monospace;">${new Date(asset.timestamp).toLocaleTimeString()}</span>
           </div>
           <div>${statusLabel}</div>
@@ -4516,7 +4563,6 @@
       if (isOrchestrating) return;
       isOrchestrating = true;
 
-      // Switch to mission control tab
       switchTab('mission');
       resetPipelineIndicators();
 
@@ -4535,155 +4581,266 @@
         timelineBox.scrollTop = timelineBox.scrollHeight;
       }
 
+      // ── Run variables (populated by API or client-side fallback) ──
+      let riskApproved = false;
+      let calculatedRiskIndex = 0.5;
+      let allocatedCspr = 292;
+      let deployHash = null;
+      let newAssetRun = null;
+
       try {
-        // Step 1: Oracle
+        // ── STEP 1: Oracle — show ingestion immediately ──
         setStageRunning('oracle');
         setTimelineActiveStep(1, 'done');
         setTimelineActiveStep(2, 'active');
-        addTimelineMsg(`Swarm Ingested Asset Reference parameters: ${payload.assetId}...`, 'info');
-        await new Promise(r => setTimeout(r, 800));
+        addTimelineMsg(`Swarm Ingested Asset Reference parameters: ${payload.assetId || 'Unknown Asset'}...`, 'info');
+        await new Promise(r => setTimeout(r, 600));
 
-        // Evaluate Oracle parameters locally
-        const o = {
+        // Set active report for Deep-dive (pre-populate before API returns)
+        activeAssetReport = {
           assetId: payload.assetId,
           valuation: payload.valuation,
-          borrowerCreditScore: payload.borrowerCreditScore,
-          countryCode: payload.countryCode
-        };
-        setStageSuccess('oracle', `Valuation: $${o.valuation.toLocaleString()}\nFICO score: ${o.borrowerCreditScore}\nOrigin: ${o.countryCode}`);
-        addTimelineMsg(`Oracle Agent → Ingested metrics for asset ${o.assetId} successfully.`, 'success');
-        setTimelineActiveStep(2, 'done');
-
-        // Set active report for Deep-dive
-        let calculatedRiskIndex = 0.5;
-        if (payload.borrowerCreditScore < 650) calculatedRiskIndex += 0.2;
-        if (payload.countryCode === 'DE') calculatedRiskIndex += 0.35;
-        if (payload.countryCode === 'BR') calculatedRiskIndex = 1.0;
-
-        activeAssetReport = {
-          assetId: o.assetId,
-          valuation: o.valuation,
-          credit: o.borrowerCreditScore,
-          country: o.countryCode,
-          riskIndex: calculatedRiskIndex
-        };
-        localStorage.setItem('active_asset_id', o.assetId);
-
-        // Step 2: Compliance
-        setStageRunning('compliance');
-        setTimelineActiveStep(3, 'active');
-        addTimelineMsg("Compliance Agent → Screening whitelists and structural sanction registers...", 'info');
-        await new Promise(r => setTimeout(r, 800));
-        
-        const whitelistedCountries = ['US', 'CA', 'IN'];
-        const isCountryOk = whitelistedCountries.includes(payload.countryCode);
-        const isCreditOk = payload.borrowerCreditScore >= 600;
-        const complianceApproved = isCountryOk && isCreditOk;
-        
-        const violations = [];
-        if (!isCountryOk) violations.push(`Origin country ${payload.countryCode} is not whitelisted.`);
-        if (!isCreditOk) violations.push(`FICO score ${payload.borrowerCreditScore} below whitelist threshold.`);
-
-        if (complianceApproved) {
-          setStageSuccess('compliance', `Compliant: whitelist pass\nBlacklist check: clear`);
-          addTimelineMsg(`Compliance Agent → Approved. Whitelist matches allowed country. Credit score ${o.borrowerCreditScore} meets thresholds.`, 'success');
-          setTimelineActiveStep(3, 'done');
-        } else {
-          setStageFailed('compliance', `Violations:\n${violations.join('\n')}`);
-          addTimelineMsg(`Compliance Agent → Rejected. Violations: ${violations.join(', ')}`, 'error');
-          setTimelineActiveStep(3, 'active');
-        }
-
-        // Step 3: Treasury
-        setStageRunning('treasury');
-        setTimelineActiveStep(4, 'active');
-        addTimelineMsg("Treasury Agent → Reading purse balance reserves on Casper Testnet RPC node...", 'info');
-        await new Promise(r => setTimeout(r, 800));
-
-        const balanceCspr = globalHistory ? globalHistory.balanceCspr : 2924;
-        let allocatedCspr = Math.floor(balanceCspr * 0.1);
-        if (allocatedCspr > 500) allocatedCspr = 500;
-        if (allocatedCspr < 10) allocatedCspr = 10;
-
-        setStageSuccess('treasury', `Reserve: ${balanceCspr} CSPR\nAllocated: ${allocatedCspr} CSPR`);
-        addTimelineMsg(`Treasury Agent → Reserve balance matches: ${balanceCspr} CSPR. Sized allocation: 10% (${allocatedCspr} CSPR).`, 'success');
-        setTimelineActiveStep(4, 'done');
-
-        // Step 4: Risk
-        setStageRunning('risk');
-        setTimelineActiveStep(5, 'active');
-        addTimelineMsg("Risk Analyst → Processing LTV ratios and applying scaled memory risk threshold limits...", 'info');
-        await new Promise(r => setTimeout(r, 800));
-
-        const maxAcceptableRisk = globalHistory.confidenceScore < 70 ? (0.8 * (globalHistory.confidenceScore / 70)) : 0.8;
-        const riskApproved = complianceApproved && calculatedRiskIndex <= maxAcceptableRisk;
-
-        if (riskApproved) {
-          setStageSuccess('risk', `Risk Index: ${calculatedRiskIndex}\nMax Limit: ${maxAcceptableRisk.toFixed(2)}`);
-          addTimelineMsg(`Risk Analyst → Approved. Composite risk score ${calculatedRiskIndex} is below threshold ${maxAcceptableRisk.toFixed(2)}.`, 'success');
-          setTimelineActiveStep(5, 'done');
-          setTimelineActiveStep(6, 'active');
-        } else {
-          setStageFailed('risk', `Risk Index: ${calculatedRiskIndex}\nMax Limit: ${maxAcceptableRisk.toFixed(2)}`);
-          addTimelineMsg(`Risk Analyst → Rejected. Composite risk score ${calculatedRiskIndex} exceeds dynamic threshold ${maxAcceptableRisk.toFixed(2)}.`, 'error');
-          setTimelineActiveStep(5, 'active');
-        }
-
-        // Step 5: Execution
-        setStageRunning('execution');
-        addTimelineMsg("Swarm Executor → Broadcaster initializing JSON-RPC signature package payload...", 'info');
-        await new Promise(r => setTimeout(r, 800));
-
-        const deployHash = riskApproved 
-          ? '01' + Math.random().toString(16).substring(2, 18) + Math.random().toString(16).substring(2, 18)
-          : null;
-
-        if (riskApproved) {
-          setStageSuccess('execution', `Deploy Hash:\n${deployHash.substring(0,22)}...`);
-          addTimelineMsg(`Swarm Executor → Broadcast Success! Casper Deploy Hash: ${deployHash.substring(0,20)}...`, 'success');
-          setTimelineActiveStep(6, 'done');
-          setTimelineActiveStep(7, 'done');
-        } else {
-          setStageFailed('execution', `Aborted\nReason: Check upstream compliance/risk parameters.`);
-          addTimelineMsg(`Swarm Executor → Aborted capital allocation due to pipeline check failure.`, 'error');
-        }
-
-        addTimelineMsg("Swarm run finished. Dynamic modifiers logged to history registers.", 'info');
-        
-        // Save to Client State
-        const state = loadMemoryState();
-        state.totalRuns += 1;
-        if (riskApproved) {
-          state.successfulDeploys += 1;
-          state.confidenceScore = Math.min(100, state.confidenceScore + 5);
-        } else {
-          state.confidenceScore = Math.max(0, state.confidenceScore - 15);
-        }
-
-        const newAssetRun = {
-          assetId: payload.assetId, // Explicitly populate naming field to prevent undefined naming error
-          timestamp: Date.now(),
-          approved: riskApproved,
-          riskIndex: calculatedRiskIndex,
-          amountCspr: riskApproved ? allocatedCspr : 0,
-          deployHash: deployHash || undefined,
-          // Store evaluation fields so pages can resolve live metrics without defaulting
           credit: payload.borrowerCreditScore,
           country: payload.countryCode,
-          valuation: payload.valuation
+          riskIndex: calculatedRiskIndex
         };
+        localStorage.setItem('active_asset_id', payload.assetId);
 
+        // ── PRIMARY: Call /api/execute-mission for the real server-side pipeline ──
+        let apiRun = null;
+        try {
+          addTimelineMsg('Dispatching to Swarm API pipeline executor...', 'info');
+          const res = await fetch('/api/execute-mission', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const result = await res.json();
+          if (result.success && result.data) {
+            apiRun = result.data;
+          } else {
+            throw new Error(result.error || 'API pipeline returned failure');
+          }
+        } catch (apiErr) {
+          console.warn('[simulateIngest] API execute-mission failed, running client-side fallback:', apiErr.message);
+          addTimelineMsg(`API unavailable — running local pipeline engine...`, 'info');
+          apiRun = null; // signal fallback
+        }
+
+        if (apiRun) {
+          // ── API RESPONSE: Drive UI from real server pipeline output ──
+          const o = apiRun.oracle?.data || { assetId: payload.assetId, valuation: payload.valuation, borrowerCreditScore: payload.borrowerCreditScore, countryCode: payload.countryCode };
+          setStageSuccess('oracle', `Valuation: $${(o.valuation || payload.valuation).toLocaleString()}\nFICO score: ${o.borrowerCreditScore || payload.borrowerCreditScore}\nOrigin: ${o.countryCode || payload.countryCode}`);
+          addTimelineMsg(`Oracle Agent → Ingested metrics for asset ${payload.assetId} successfully.`, 'success');
+          setTimelineActiveStep(2, 'done');
+
+          await new Promise(r => setTimeout(r, 600));
+
+          // Compliance
+          setStageRunning('compliance');
+          setTimelineActiveStep(3, 'active');
+          addTimelineMsg('Compliance Agent → Screening whitelists and structural sanction registers...', 'info');
+          await new Promise(r => setTimeout(r, 600));
+
+          const c = apiRun.compliance?.data || {};
+          if (apiRun.compliance?.status === 'SUCCESS') {
+            setStageSuccess('compliance', `Compliant: whitelist pass\nBlacklist check: clear`);
+            addTimelineMsg(`Compliance Agent → Approved. Credit ${o.borrowerCreditScore || payload.borrowerCreditScore} meets thresholds.`, 'success');
+            setTimelineActiveStep(3, 'done');
+          } else {
+            const viols = c.violations || ['Compliance check failed'];
+            setStageFailed('compliance', `Violations:\n${viols.join('\n')}`);
+            addTimelineMsg(`Compliance Agent → Rejected. Violations: ${viols.join(', ')}`, 'error');
+            setTimelineActiveStep(3, 'active');
+          }
+
+          // Treasury
+          setStageRunning('treasury');
+          setTimelineActiveStep(4, 'active');
+          addTimelineMsg('Treasury Agent → Reading purse balance reserves on Casper Testnet RPC node...', 'info');
+          await new Promise(r => setTimeout(r, 600));
+
+          const t = apiRun.treasury?.data || {};
+          allocatedCspr = t.allocatedAmountCspr || 292;
+          const reserveBal = t.walletBalanceCspr || (globalHistory?.balanceCspr || 2924);
+          setStageSuccess('treasury', `Reserve: ${reserveBal} CSPR\nAllocated: ${allocatedCspr} CSPR`);
+          addTimelineMsg(`Treasury Agent → Reserve balance: ${reserveBal} CSPR. Allocation: 10% (${allocatedCspr} CSPR).`, 'success');
+          setTimelineActiveStep(4, 'done');
+
+          // Risk
+          setStageRunning('risk');
+          setTimelineActiveStep(5, 'active');
+          addTimelineMsg('Risk Analyst → Processing LTV ratios and applying scaled memory risk threshold limits...', 'info');
+          await new Promise(r => setTimeout(r, 600));
+
+          const r = apiRun.risk?.data || {};
+          calculatedRiskIndex = r.riskIndex || 0.5;
+          const maxRisk = r.maxAcceptableRisk || 0.80;
+          riskApproved = apiRun.risk?.status === 'SUCCESS';
+
+          // Update active report with real risk index from API
+          activeAssetReport.riskIndex = calculatedRiskIndex;
+
+          if (riskApproved) {
+            setStageSuccess('risk', `Risk Index: ${calculatedRiskIndex}\nMax Limit: ${maxRisk}`);
+            addTimelineMsg(`Risk Analyst → Approved. Composite risk score ${calculatedRiskIndex} below threshold ${maxRisk}.`, 'success');
+            setTimelineActiveStep(5, 'done');
+            setTimelineActiveStep(6, 'active');
+          } else {
+            setStageFailed('risk', `Risk Index: ${calculatedRiskIndex}\nMax Limit: ${maxRisk}`);
+            addTimelineMsg(`Risk Analyst → Rejected. Composite risk score ${calculatedRiskIndex} exceeds dynamic threshold ${maxRisk}.`, 'error');
+            setTimelineActiveStep(5, 'active');
+          }
+
+          // Execution
+          setStageRunning('execution');
+          addTimelineMsg('Swarm Executor → Broadcaster initializing JSON-RPC signature package payload...', 'info');
+          await new Promise(r => setTimeout(r, 600));
+
+          const e = apiRun.execution?.data || {};
+          deployHash = e.deployHash || null;
+          if (apiRun.execution?.status === 'SUCCESS' && deployHash) {
+            setStageSuccess('execution', `Deploy Hash:\n${deployHash.substring(0, 22)}...`);
+            addTimelineMsg(`Swarm Executor → Broadcast Success! Casper Deploy Hash: ${deployHash.substring(0, 20)}...`, 'success');
+            setTimelineActiveStep(6, 'done');
+            setTimelineActiveStep(7, 'done');
+          } else {
+            setStageFailed('execution', `Aborted\nReason: Check upstream compliance/risk parameters.`);
+            addTimelineMsg(`Swarm Executor → Aborted capital allocation due to pipeline check failure.`, 'error');
+          }
+
+          // Use the memory blob from the API response if available
+          if (apiRun.memory) {
+            newAssetRun = {
+              assetId: apiRun.memory.assetId || payload.assetId,
+              timestamp: Date.now(),
+              approved: apiRun.memory.approved ?? riskApproved,
+              riskIndex: apiRun.memory.riskIndex ?? calculatedRiskIndex,
+              amountCspr: apiRun.memory.amountCspr ?? (riskApproved ? allocatedCspr : 0),
+              deployHash: apiRun.memory.deployHash || deployHash || undefined,
+              credit: payload.borrowerCreditScore,
+              country: payload.countryCode,
+              valuation: payload.valuation
+            };
+          }
+
+        } else {
+          // ── CLIENT-SIDE FALLBACK PIPELINE ──
+          const o = { assetId: payload.assetId, valuation: payload.valuation, borrowerCreditScore: payload.borrowerCreditScore, countryCode: payload.countryCode };
+          setStageSuccess('oracle', `Valuation: $${o.valuation.toLocaleString()}\nFICO score: ${o.borrowerCreditScore}\nOrigin: ${o.countryCode}`);
+          addTimelineMsg(`Oracle Agent → Ingested metrics for asset ${o.assetId} successfully.`, 'success');
+          setTimelineActiveStep(2, 'done');
+          await new Promise(r => setTimeout(r, 600));
+
+          if (o.borrowerCreditScore < 650) calculatedRiskIndex += 0.2;
+          if (o.countryCode === 'DE' || o.countryCode === 'FR') calculatedRiskIndex += 0.35;
+          if (o.countryCode === 'BR') calculatedRiskIndex = 1.0;
+          activeAssetReport.riskIndex = calculatedRiskIndex;
+
+          setStageRunning('compliance');
+          setTimelineActiveStep(3, 'active');
+          addTimelineMsg('Compliance Agent → Screening whitelists and structural sanction registers...', 'info');
+          await new Promise(r => setTimeout(r, 600));
+
+          const whitelisted = ['US', 'CA', 'IN'];
+          const isCountryOk = whitelisted.includes(o.countryCode);
+          const isCreditOk = o.borrowerCreditScore >= 600;
+          const complianceApproved = isCountryOk && isCreditOk;
+          const violations = [];
+          if (!isCountryOk) violations.push(`Origin country ${o.countryCode} is not whitelisted.`);
+          if (!isCreditOk) violations.push(`FICO score ${o.borrowerCreditScore} below threshold.`);
+
+          if (complianceApproved) {
+            setStageSuccess('compliance', `Compliant: whitelist pass\nBlacklist check: clear`);
+            addTimelineMsg(`Compliance Agent → Approved. Whitelist matches.`, 'success');
+            setTimelineActiveStep(3, 'done');
+          } else {
+            setStageFailed('compliance', `Violations:\n${violations.join('\n')}`);
+            addTimelineMsg(`Compliance Agent → Rejected. ${violations.join(', ')}`, 'error');
+            setTimelineActiveStep(3, 'active');
+          }
+
+          setStageRunning('treasury');
+          setTimelineActiveStep(4, 'active');
+          addTimelineMsg('Treasury Agent → Reading purse balance reserves on Casper Testnet RPC node...', 'info');
+          await new Promise(r => setTimeout(r, 600));
+          const balanceCspr = globalHistory?.balanceCspr || 2924;
+          allocatedCspr = Math.min(500, Math.max(10, Math.floor(balanceCspr * 0.1)));
+          setStageSuccess('treasury', `Reserve: ${balanceCspr} CSPR\nAllocated: ${allocatedCspr} CSPR`);
+          addTimelineMsg(`Treasury Agent → Reserve: ${balanceCspr} CSPR. Allocation: ${allocatedCspr} CSPR.`, 'success');
+          setTimelineActiveStep(4, 'done');
+
+          setStageRunning('risk');
+          setTimelineActiveStep(5, 'active');
+          addTimelineMsg('Risk Analyst → Processing LTV ratios and applying scaled memory risk threshold limits...', 'info');
+          await new Promise(r => setTimeout(r, 600));
+          const maxRisk = (globalHistory?.confidenceScore || 75) < 70 ? (0.8 * ((globalHistory?.confidenceScore || 75) / 70)) : 0.8;
+          riskApproved = complianceApproved && calculatedRiskIndex <= maxRisk;
+
+          if (riskApproved) {
+            setStageSuccess('risk', `Risk Index: ${calculatedRiskIndex}\nMax Limit: ${maxRisk.toFixed(2)}`);
+            addTimelineMsg(`Risk Analyst → Approved. Score ${calculatedRiskIndex} below ${maxRisk.toFixed(2)}.`, 'success');
+            setTimelineActiveStep(5, 'done');
+            setTimelineActiveStep(6, 'active');
+          } else {
+            setStageFailed('risk', `Risk Index: ${calculatedRiskIndex}\nMax Limit: ${maxRisk.toFixed(2)}`);
+            addTimelineMsg(`Risk Analyst → Rejected. Score ${calculatedRiskIndex} exceeds ${maxRisk.toFixed(2)}.`, 'error');
+            setTimelineActiveStep(5, 'active');
+          }
+
+          setStageRunning('execution');
+          addTimelineMsg('Swarm Executor → Broadcaster initializing JSON-RPC signature package payload...', 'info');
+          await new Promise(r => setTimeout(r, 600));
+          deployHash = riskApproved ? '01' + Math.random().toString(16).substring(2, 18) + Math.random().toString(16).substring(2, 18) : null;
+
+          if (riskApproved && deployHash) {
+            setStageSuccess('execution', `Deploy Hash:\n${deployHash.substring(0, 22)}...`);
+            addTimelineMsg(`Swarm Executor → Broadcast Success! Deploy Hash: ${deployHash.substring(0, 20)}...`, 'success');
+            setTimelineActiveStep(6, 'done');
+            setTimelineActiveStep(7, 'done');
+          } else {
+            setStageFailed('execution', `Aborted\nReason: Check upstream compliance/risk parameters.`);
+            addTimelineMsg(`Swarm Executor → Aborted capital allocation due to pipeline check failure.`, 'error');
+          }
+        }
+
+        addTimelineMsg('Swarm run finished. Dynamic modifiers logged to history registers.', 'info');
+
+        // ── PERSIST: Save run to localStorage + sync back to API ──
+        if (!newAssetRun) {
+          newAssetRun = {
+            assetId: payload.assetId,
+            timestamp: Date.now(),
+            approved: riskApproved,
+            riskIndex: calculatedRiskIndex,
+            amountCspr: riskApproved ? allocatedCspr : 0,
+            deployHash: deployHash || undefined,
+            credit: payload.borrowerCreditScore,
+            country: payload.countryCode,
+            valuation: payload.valuation
+          };
+        }
+
+        const state = loadMemoryState();
+        state.totalRuns = (state.totalRuns || 0) + 1;
+        if (riskApproved) {
+          state.successfulDeploys = (state.successfulDeploys || 0) + 1;
+          state.confidenceScore = Math.min(100, (state.confidenceScore || 75) + 5);
+        } else {
+          state.confidenceScore = Math.max(0, (state.confidenceScore || 75) - 15);
+        }
+        state.historicalAssets = state.historicalAssets || [];
         state.historicalAssets.push(newAssetRun);
         saveMemoryState(state);
 
-        // GLOBAL RE-FETCH TRIGGER: Dispatch a CustomEvent so any active view can immediately
-        // re-sync its render without waiting for the next tab-switch cycle.
+        // Fire global sync event so evaluation/explorer views re-render immediately
         window.dispatchEvent(new CustomEvent('nexus:stateUpdate', { detail: { latestRun: newAssetRun } }));
 
-        // Refresh State
+        // Refresh all KPI metrics
         await loadStats();
+
       } catch (err) {
-        console.error(err);
+        console.error('[simulateIngest] Fatal error:', err);
         addTimelineMsg(`Swarm pipeline crashed: ${err.message}`, 'error');
       } finally {
         isOrchestrating = false;
