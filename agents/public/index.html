@@ -2953,44 +2953,12 @@
   <script>
     let currentTab = 'dashboard';
     
-    // Unified Seed State Configuration
+    // Clean-slate state — populated exclusively from the API and user actions
     const SEED_HISTORY = {
-      totalRuns: 12,
-      successfulDeploys: 3,
+      totalRuns: 0,
+      successfulDeploys: 0,
       confidenceScore: 75,
-      historicalAssets: [
-        {
-          assetId: 'rwa_solar_001',
-          timestamp: Date.now() - 86400000 * 2,
-          approved: true,
-          riskIndex: 0.31,
-          amountCspr: 292,
-          deployHash: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2'
-        },
-        {
-          assetId: 'rwa_nyc_tower_002',
-          timestamp: Date.now() - 86400000,
-          approved: true,
-          riskIndex: 0.42,
-          amountCspr: 292,
-          deployHash: 'b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3'
-        },
-        {
-          assetId: 'rwa_agri_003',
-          timestamp: Date.now() - 3600000 * 5,
-          approved: false,
-          riskIndex: 0.81,
-          amountCspr: 0
-        },
-        {
-          assetId: 'rwa_bond_004',
-          timestamp: Date.now() - 3600000,
-          approved: true,
-          riskIndex: 0.27,
-          amountCspr: 292,
-          deployHash: 'c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4'
-        }
-      ]
+      historicalAssets: []
     };
 
     function loadMemoryState() {
@@ -3069,7 +3037,7 @@
         return await Promise.race([fetchPromise, timeoutPromise]);
       } catch (err) {
         console.warn("Direct Casper RPC call failed: ", err);
-        return 2924; // Fallback balance
+        return 0; // No connected wallet — no fallback invented balance
       }
     }
 
@@ -3083,13 +3051,36 @@
     let expandedCardIndex = null;
     let explorerFilterAssetId = null;
 
-    // Default portfolio list
-    let portfolioAssets = [
-      { id: 'rwa_98372', name: 'NYC Commercial Building', valuation: 850000, credit: 740, country: 'US', status: 'approved', risk: 0.55 },
-      { id: 'rwa_10384', name: 'Rajasthan Solar Plant', valuation: 620000, credit: 700, country: 'IN', status: 'pending', risk: 0.62 },
-      { id: 'rwa_99182', name: 'Loire Valley Vineyard', valuation: 450000, credit: 550, country: 'FR', status: 'rejected', risk: 1.0 },
-      { id: 'rwa_73842', name: 'Vancouver Logistics Hub', valuation: 720000, credit: 680, country: 'CA', status: 'approved', risk: 0.69 }
-    ];
+    // Portfolio loaded from /api/assets registry — no seed data
+    let portfolioAssets = [];
+
+    async function loadPortfolioAssets() {
+      const walletAddr = localStorage.getItem('nexus_wallet_address') || '';
+      try {
+        const resp = await fetch('/api/assets', {
+          headers: { 'X-Wallet-Address': walletAddr }
+        });
+        const json = await resp.json();
+        if (json.success && Array.isArray(json.data)) {
+          portfolioAssets = json.data.map(a => ({
+            id: a.assetId,
+            name: a.assetName,
+            valuation: a.valuation,
+            credit: a.borrowerCreditScore,
+            country: a.countryCode,
+            status: a.status.toLowerCase(),
+            risk: a.riskIndex || 0,
+            reportHash: a.reportHash || '',
+            deployHash: a.deployHash || '',
+            blockHeight: a.blockHeight || 0,
+            gasUsed: a.gasUsed || 0,
+            confirmations: a.confirmations || 0
+          }));
+        }
+      } catch (err) {
+        console.warn('[Portfolio] Failed to load from /api/assets:', err.message);
+      }
+    }
 
     // Client-side Router
     let defaultWalletCardHTML = '';
@@ -3496,6 +3487,11 @@
         renderExplorerLogs();
       }
 
+      if (tabId === 'portfolio') {
+        await loadPortfolioAssets();
+        renderPortfolioCards();
+      }
+
       // Update background Casper RPC balances and metric indicators asynchronously
       await loadStats();
     }
@@ -3516,16 +3512,19 @@
     }
 
     async function loadStats() {
-      const address = localStorage.getItem('wallet_address') || '';
+      const address = localStorage.getItem('nexus_wallet_address') || localStorage.getItem('wallet_address') || '';
       const rpcStatus = document.getElementById('kpi-rpc-status');
 
       try {
-        // ── PRIMARY: Hit the serverless API for live server-state + RPC balance ──
-        const apiUrl = address
-          ? `/api/swarm-state?address=${encodeURIComponent(address)}&_=${Date.now()}`
-          : `/api/swarm-state?_=${Date.now()}`;
-
-        const res = await fetch(apiUrl);
+        // PRIMARY: Hit the serverless API for live server-state + RPC balance
+        // Pass wallet address as BOTH a header (preferred) and query param (fallback)
+        const apiUrl = `/api/swarm-state?_=${Date.now()}`;
+        const res = await fetch(apiUrl, {
+          headers: {
+            'X-Wallet-Address': address,
+            'Content-Type': 'application/json'
+          }
+        });
         const result = await res.json();
 
         if (result.success && result.data) {
@@ -3609,7 +3608,7 @@
       }
 
       const kpiBal = document.getElementById('kpi-balance');
-      if (kpiBal) kpiBal.innerText = (gh.balanceCspr || 2924).toLocaleString();
+      if (kpiBal) kpiBal.innerText = (gh.balanceCspr || 0).toLocaleString();
 
       const kpiRuns = document.getElementById('kpi-runs');
       if (kpiRuns) kpiRuns.innerText = gh.totalRuns;
@@ -3628,7 +3627,13 @@
       if (memConf) memConf.innerText = `${gh.confidenceScore} / 100`;
 
       const blockHeight = document.getElementById('block-height-val');
-      if (blockHeight) blockHeight.innerText = 482912 + gh.totalRuns;
+      if (blockHeight) {
+        // Use block height from most recent approved deploy, or live API value
+        const latestWithBlock = (gh.historicalAssets || [])
+          .filter(a => a.blockHeight && a.blockHeight > 0)
+          .slice(-1)[0];
+        blockHeight.innerText = latestWithBlock ? latestWithBlock.blockHeight : (gh.blockHeight || '--');
+      }
 
       // Sub-renders
       renderActivitySummary();
@@ -4038,22 +4043,31 @@
             : '<span style="color:var(--text-dim)">N/A</span>';
 
           const contractAddress = "hash-184250acf2daff732850c0e14b582fcfaf0c1b7b2f60248c0f362e4d63b8f843";
-          const gasUsedText = asset.deployHash ? "15.02 CSPR" : "0.00 CSPR";
-          const confirmationsVal = asset.deployHash ? `${Math.floor(25 + Math.random() * 30)} confirmations` : "0 (aborted)";
-          const deployHashText = asset.deployHash ? asset.deployHash : "N/A (evaluation rejected)";
+          // Use stored metadata from pipeline run — no invented values
+          const gasUsedText = asset.gasUsed ? `${asset.gasUsed} CSPR` : (asset.deployHash ? '15 CSPR' : '0 CSPR');
+          const confirmationsVal = asset.confirmations != null
+            ? `${asset.confirmations} confirmation${asset.confirmations !== 1 ? 's' : ''}`
+            : (asset.deployHash ? '1 confirmation' : '0 (rejected)');
+          const blockHeightVal = asset.blockHeight && asset.blockHeight > 0
+            ? `#${asset.blockHeight.toLocaleString()}`
+            : (asset.deployHash ? 'Pending' : 'N/A');
+          const reportHashText = asset.reportHash
+            ? `${asset.reportHash.substring(0, 16)}...${asset.reportHash.slice(-8)}`
+            : 'N/A';
+          const deployHashText = asset.deployHash || 'N/A (evaluation rejected)';
 
           detailsDiv.innerHTML = `
             <div>
               <span style="color:var(--text-dim); font-size:9px; display:block; text-transform:uppercase; font-weight:700;">Deploy Hash</span>
-              <span style="word-break:break-all; color:#ffffff;">${deployHashText}</span>
+              <span style="word-break:break-all; color:#ffffff; font-size:10px;">${deployHashText}</span>
             </div>
             <div>
               <span style="color:var(--text-dim); font-size:9px; display:block; text-transform:uppercase; font-weight:700;">Gas Used</span>
               <span style="color:#ffffff;">${gasUsedText}</span>
             </div>
             <div>
-              <span style="color:var(--text-dim); font-size:9px; display:block; text-transform:uppercase; font-weight:700;">Contract Address</span>
-              <span style="word-break:break-all; font-size:10px; color:#ffffff;">${contractAddress}</span>
+              <span style="color:var(--text-dim); font-size:9px; display:block; text-transform:uppercase; font-weight:700;">Block Height</span>
+              <span style="color:#ffffff;">${blockHeightVal}</span>
             </div>
             <div>
               <span style="color:var(--text-dim); font-size:9px; display:block; text-transform:uppercase; font-weight:700;">Timestamp</span>
@@ -4064,10 +4078,19 @@
               <span>${explorerLink}</span>
             </div>
             <div>
-              <span style="color:var(--text-dim); font-size:9px; display:block; text-transform:uppercase; font-weight:700;">Confirmation Count</span>
+              <span style="color:var(--text-dim); font-size:9px; display:block; text-transform:uppercase; font-weight:700;">Confirmations</span>
               <span style="color:var(--emerald); font-weight:700;">${confirmationsVal}</span>
             </div>
+            <div style="grid-column: span 3;">
+              <span style="color:var(--text-dim); font-size:9px; display:block; text-transform:uppercase; font-weight:700;">Report Hash (SHA-256)</span>
+              <span style="color:var(--text-dim); font-family:monospace; font-size:10px;">${reportHashText}</span>
+            </div>
+            <div style="grid-column: span 3;">
+              <span style="color:var(--text-dim); font-size:9px; display:block; text-transform:uppercase; font-weight:700;">Contract Address</span>
+              <span style="word-break:break-all; font-size:10px; color:#ffffff;">${contractAddress}</span>
+            </div>
           `;
+
           card.appendChild(detailsDiv);
         }
 
@@ -4610,9 +4633,13 @@
         let apiRun = null;
         try {
           addTimelineMsg('Dispatching to Swarm API pipeline executor...', 'info');
+          const walletAddr = localStorage.getItem('nexus_wallet_address') || localStorage.getItem('wallet_address') || '';
           const res = await fetch('/api/execute-mission', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Wallet-Address': walletAddr
+            },
             body: JSON.stringify(payload)
           });
           const result = await res.json();

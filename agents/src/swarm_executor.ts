@@ -15,6 +15,7 @@ import { validateCompliance, ComplianceReport } from './compliance_agent';
 import { auditTreasury, TreasuryReport } from './treasury_agent';
 import { analyzeRisk, ClearancePayload } from './risk_analyst';
 
+import * as crypto from 'crypto';
 import * as os from 'os';
 
 // ── Configuration Layer ──────────────────────────────────────────────────
@@ -48,7 +49,9 @@ export interface PipelineRunResult {
   risk: PipelineStepResult;
   execution: PipelineStepResult;
   memory: MemoryData;
+  reportHash: string;
 }
+
 
 /**
  * Loads the local Casper Ed25519 keypair from the filesystem.
@@ -195,23 +198,69 @@ export async function runSwarmPipeline(customAsset?: Partial<RwaAssetData>): Pro
     data: riskData
   };
 
+  // ── Generate SHA-256 report fingerprint ────────────────────────────────
+  const reportPayload = {
+    assetId: oracleData.assetId,
+    riskIndex: riskData.riskIndex,
+    complianceCompliant: complianceData.compliant,
+    agencySignature: complianceData.agencySignature,
+    walletBalanceCspr: treasuryData.walletBalanceCspr,
+    allocatedCspr: treasuryData.allocatedAmountCspr,
+    riskNarrative: riskData.narrative,
+    timestamp: Date.now()
+  };
+  const reportHash = crypto
+    .createHash('sha256')
+    .update(JSON.stringify(reportPayload))
+    .digest('hex');
+
   // 5. Capital Deployment Execution
   let executionResult: PipelineStepResult;
   let finalMemory: MemoryData;
+
+  // Estimated gas per Casper deploy (payment motes to CSPR)
+  const gasUsed = Math.floor(PAYMENT_MOTES / 1_000_000_000);
+
+  // Block height: attempt live RPC query, fall back to deterministic estimate
+  let blockHeight = 0;
+  try {
+    const { CasperServiceByJsonRPC } = await import('casper-js-sdk');
+    const rpc = new CasperServiceByJsonRPC(NODE_RPC_URL);
+    const blockInfo = await Promise.race([
+      rpc.getLatestBlockInfo(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
+    ]);
+    blockHeight = (blockInfo as any)?.block?.header?.height || 0;
+  } catch (_) {
+    blockHeight = 0;
+  }
 
   if (!riskData.approved) {
     executionResult = {
       step: '5',
       name: 'Swarm Capital Deployment',
       status: 'FAILED',
-      data: { error: 'Aborted due to compliance/risk rejects.' }
+      data: { error: 'Aborted due to compliance/risk rejects.', reportHash }
     };
     finalMemory = updateMemory(
       oracleData.assetId,
       false,
       riskData.riskIndex,
       treasuryData.allocatedAmountCspr,
-      false
+      false,
+      undefined,
+      {
+        reportHash,
+        gasUsed,
+        blockHeight,
+        confirmations: 0,
+        credit: oracleData.borrowerCreditScore,
+        country: oracleData.countryCode,
+        valuation: oracleData.valuation,
+        liveDataActive: oracleData.liveDataActive,
+        liveCsprPriceUsd: oracleData.liveCsprPriceUsd,
+        riskNarrative: riskData.narrative
+      }
     );
   } else {
     try {
@@ -220,7 +269,7 @@ export async function runSwarmPipeline(customAsset?: Partial<RwaAssetData>): Pro
         step: '5',
         name: 'Swarm Capital Deployment',
         status: 'SUCCESS',
-        data: { deployHash }
+        data: { deployHash, reportHash, gasUsed, blockHeight, confirmations: 1 }
       };
       finalMemory = updateMemory(
         oracleData.assetId,
@@ -228,21 +277,46 @@ export async function runSwarmPipeline(customAsset?: Partial<RwaAssetData>): Pro
         riskData.riskIndex,
         treasuryData.allocatedAmountCspr,
         true,
-        deployHash
+        deployHash,
+        {
+          reportHash,
+          gasUsed,
+          blockHeight,
+          confirmations: 1,
+          credit: oracleData.borrowerCreditScore,
+          country: oracleData.countryCode,
+          valuation: oracleData.valuation,
+          liveDataActive: oracleData.liveDataActive,
+          liveCsprPriceUsd: oracleData.liveCsprPriceUsd,
+          riskNarrative: riskData.narrative
+        }
       );
     } catch (err: any) {
       executionResult = {
         step: '5',
         name: 'Swarm Capital Deployment',
         status: 'FAILED',
-        data: { error: err.message }
+        data: { error: err.message, reportHash }
       };
       finalMemory = updateMemory(
         oracleData.assetId,
         true,
         riskData.riskIndex,
         treasuryData.allocatedAmountCspr,
-        false
+        false,
+        undefined,
+        {
+          reportHash,
+          gasUsed,
+          blockHeight,
+          confirmations: 0,
+          credit: oracleData.borrowerCreditScore,
+          country: oracleData.countryCode,
+          valuation: oracleData.valuation,
+          liveDataActive: oracleData.liveDataActive,
+          liveCsprPriceUsd: oracleData.liveCsprPriceUsd,
+          riskNarrative: riskData.narrative
+        }
       );
     }
   }
@@ -253,7 +327,8 @@ export async function runSwarmPipeline(customAsset?: Partial<RwaAssetData>): Pro
     treasury: treasuryResult,
     risk: riskResult,
     execution: executionResult,
-    memory: finalMemory
+    memory: finalMemory,
+    reportHash
   };
 }
 

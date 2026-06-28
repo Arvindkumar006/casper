@@ -11,7 +11,8 @@
       "config": {
         "includeFiles": [
           "config/compliance.json",
-          "history_db.json"
+          "history_db.json",
+          "assets_db.json"
         ]
       }
     }
@@ -20,6 +21,10 @@
     {
       "src": "/api/history",
       "dest": "/api/history.ts"
+    },
+    {
+      "src": "/api/assets",
+      "dest": "/api/assets.ts"
     },
     {
       "src": "/api/run",
