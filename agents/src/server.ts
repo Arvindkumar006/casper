@@ -1,7 +1,7 @@
 import express from 'express';
 import * as path from 'path';
 import * as fs from 'fs';
-import { loadMemory } from './memory_engine';
+import { loadMemory, saveMemory } from './memory_engine';
 import { runSwarmPipeline } from './swarm_executor';
 import { auditTreasury } from './treasury_agent';
 import { CasperServiceByJsonRPC, CLPublicKey } from 'casper-js-sdk';
@@ -15,7 +15,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // Fetch historical database and wallet balance
-app.get('/api/history', async (req, res) => {
+app.get(['/api/history', '/api/swarm-state'], async (req, res) => {
   try {
     const memory = loadMemory();
     
@@ -38,7 +38,7 @@ app.get('/api/history', async (req, res) => {
           balanceCspr = 0;
         }
       } else {
-        const treasury = await auditTreasury();
+        const treasury = await auditTreasury('https://node.testnet.casper.network/rpc');
         balanceCspr = treasury.walletBalanceCspr;
         walletAddress = treasury.walletPublicKey;
       }
@@ -60,8 +60,38 @@ app.get('/api/history', async (req, res) => {
   }
 });
 
+// Post endpoint for manually adding/modeling asset
+app.post('/api/swarm-state', async (req, res) => {
+  try {
+    const memory = loadMemory();
+    const { assetId, valuation, downPayment } = req.body;
+    if (!assetId) {
+      return res.status(400).json({ success: false, error: 'Missing assetId parameter' });
+    }
+
+    const newAsset = {
+      assetId,
+      timestamp: Date.now(),
+      approved: false,
+      riskIndex: 0.5,
+      amountCspr: Math.round((valuation - (downPayment || 0)) / 10),
+    };
+
+    memory.historicalAssets.push(newAsset);
+    memory.totalRuns += 1;
+    saveMemory(memory);
+
+    res.json({
+      success: true,
+      data: memory
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Run active multi-agent pipeline
-app.post('/api/run', async (req, res) => {
+app.post(['/api/run', '/api/execute-mission'], async (req, res) => {
   try {
     console.log('[Server] Swarm execution triggered via web console.');
     const customAsset = req.body && Object.keys(req.body).length > 0 ? req.body : undefined;

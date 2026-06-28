@@ -1,116 +1,124 @@
-import { CasperClient, CasperServiceByJsonRPC, Keys, CLPublicKey } from 'casper-js-sdk';
+import { CasperServiceByJsonRPC, Keys, CLPublicKey } from 'casper-js-sdk';
 import * as path from 'path';
 import * as fs from 'fs';
-
 import * as os from 'os';
 
+// ── Configuration Layer ────────────────────────────────────────────────────
+const complianceConfig = require(path.join(__dirname, '..', 'config', 'compliance.json'));
+
+const RPC_TIMEOUT_MS: number           = complianceConfig.network.rpcTimeoutMs;
+const FALLBACK_BALANCE_MOTES: string   = complianceConfig.network.treasuryFallbackBalanceMotes;
+const ALLOCATION_CAP_CSPR: bigint      = BigInt(complianceConfig.underwriting.allocationCapCspr);
+const ALLOCATION_MIN_CSPR: bigint      = BigInt(complianceConfig.underwriting.allocationMinCspr);
+const ALLOCATION_RATIO: number         = complianceConfig.underwriting.allocationRatioPercent; // e.g. 10
+
+// ── Key Path ───────────────────────────────────────────────────────────────
 const isVercel = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
-const PRIVATE_KEY_PATH = isVercel 
-  ? path.join(os.tmpdir(), 'mock_private_key.pem') 
+const PRIVATE_KEY_PATH = isVercel
+  ? path.join(os.tmpdir(), 'mock_private_key.pem')
   : path.join(__dirname, '..', 'mock_private_key.pem');
 
+// ── Interfaces ─────────────────────────────────────────────────────────────
 export interface TreasuryReport {
   walletPublicKey: string;
   walletBalanceMotes: string;
   walletBalanceCspr: number;
   allocatedAmountMotes: string;
   allocatedAmountCspr: number;
+  /** True when RPC query failed and a static fallback balance was used. */
   isFallback: boolean;
 }
 
 /**
- * Queries the agent wallet's live balance from the Casper Testnet
- * and calculates a dynamic capital allocation size (10% of balance, capped at 500 CSPR).
+ * Queries the live wallet balance from the Casper Testnet RPC node for the
+ * actively supplied userAddress (sourced from localStorage on the client).
+ * Calculates a dynamic capital allocation of ALLOCATION_RATIO% of balance,
+ * capped at ALLOCATION_CAP_CSPR and floored at ALLOCATION_MIN_CSPR.
+ *
+ * Fallback chain (no special-case overrides allowed):
+ *   1. userAddress → resolved from caller (active connected wallet)
+ *   2. Keypair file at PRIVATE_KEY_PATH → agent treasury wallet
+ *   3. Config fallback balance (FALLBACK_BALANCE_MOTES) — RPC unavailable
  */
 export async function auditTreasury(
-  nodeRpcUrl: string = 'https://node.testnet.casper.network/rpc',
+  nodeRpcUrl: string,
   userAddress?: string
 ): Promise<TreasuryReport> {
-  // If the user is simulated, return unique simulated details to prevent mismatch
-  if (userAddress === '01a5d625d2b781a73cb51e36780c0d15b0451a73cb51e36780c0d15b0451a73') {
-    return {
-      walletPublicKey: '01a5d625d2b781a73cb51e36780c0d15b0451a73cb51e36780c0d15b0451a73',
-      walletBalanceMotes: '5000000000000',
-      walletBalanceCspr: 5000,
-      allocatedAmountMotes: '500000000000',
-      allocatedAmountCspr: 500,
-      isFallback: false
-    };
-  }
+  // Resolve the public key to query:
+  // Priority 1 — caller-provided address (connected wallet from localStorage)
+  // Priority 2 — agent keypair loaded from filesystem
+  // No hardcoded wallet backdoors are permitted.
+  let publicKeyHex = '';
+  let publicKey: ReturnType<typeof CLPublicKey.fromHex> | null = null;
 
-  let publicKeyHex = userAddress || '013e2fa9cad2d80d28362b1a206a461e71e72e12b7a461e71e72e12b7a461e71e7'; // Fallback to agent wallet
-  let publicKey: Keys.AsymmetricKey['publicKey'] | null = null;
-  let keyPair: Keys.AsymmetricKey | null = null;
-
-  if (userAddress) {
+  if (userAddress && userAddress.trim().length > 0) {
     try {
-      publicKey = CLPublicKey.fromHex(userAddress);
+      publicKey = CLPublicKey.fromHex(userAddress.trim());
+      publicKeyHex = userAddress.trim();
+      console.log(`[Treasury Agent] Resolved address from active connected wallet: ${publicKeyHex.substring(0, 20)}...`);
     } catch (_) {
-      // Ignored, will fall back
+      console.warn('[Treasury Agent] Provided userAddress is not a valid CLPublicKey hex — falling back to keypair file.');
     }
   }
 
-  // Load keypair if it exists, otherwise use fallback address
   if (!publicKey) {
     try {
       if (fs.existsSync(PRIVATE_KEY_PATH)) {
-        keyPair = Keys.Ed25519.loadKeyPairFromPrivateFile(PRIVATE_KEY_PATH);
+        const keyPair = Keys.Ed25519.loadKeyPairFromPrivateFile(PRIVATE_KEY_PATH);
         publicKey = keyPair.publicKey;
         publicKeyHex = publicKey.toHex();
+        console.log(`[Treasury Agent] Using agent keypair file at ${PRIVATE_KEY_PATH}: ${publicKeyHex.substring(0, 20)}...`);
       } else {
-        console.warn(`[Treasury Agent] Warning: Key file not found at ${PRIVATE_KEY_PATH}. Proceeding with default public key fallback.`);
+        console.warn(`[Treasury Agent] No keypair file at ${PRIVATE_KEY_PATH}. Will use config fallback balance.`);
       }
     } catch (err: any) {
-      console.warn(`[Treasury Agent] Warning: Failed to load key file: ${err.message}. Proceeding with default public key fallback.`);
+      console.warn(`[Treasury Agent] Failed to load keypair: ${err.message}. Will use config fallback balance.`);
     }
   }
 
-  let balanceMotesStr = '2450000000000'; // Funded wallet balance fallback: 2,450 CSPR
+  // ── Live RPC Query ────────────────────────────────────────────────────────
+  let balanceMotesStr = FALLBACK_BALANCE_MOTES;
   let isFallback = false;
 
   if (publicKey) {
     try {
-      console.log(`[Treasury Agent] Connecting to Casper Testnet RPC node: ${nodeRpcUrl}`);
+      console.log(`[Treasury Agent] Querying live balance from Casper Testnet RPC: ${nodeRpcUrl}`);
       const rpcService = new CasperServiceByJsonRPC(nodeRpcUrl);
-      
-      // Implement a 5-second timeout constraint to prevent blocking the SaaS console UI
+
       const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Casper RPC connection timed out after 5000ms')), 5000)
+        setTimeout(() => reject(new Error(`Casper RPC timed out after ${RPC_TIMEOUT_MS}ms`)), RPC_TIMEOUT_MS)
       );
 
       const fetchPromise = (async () => {
         const stateRootHash = await rpcService.getStateRootHash();
-        const balanceUref = await rpcService.getAccountBalanceUrefByPublicKey(stateRootHash, publicKey!);
-        const balanceBigNumber = await rpcService.getAccountBalance(stateRootHash, balanceUref);
-        return balanceBigNumber.toString();
+        const balanceUref  = await rpcService.getAccountBalanceUrefByPublicKey(stateRootHash, publicKey!);
+        const balanceBig   = await rpcService.getAccountBalance(stateRootHash, balanceUref);
+        return balanceBig.toString();
       })();
 
       balanceMotesStr = await Promise.race([fetchPromise, timeoutPromise]);
-      console.log(`[Treasury Agent] Successfully queried balance from Casper Testnet: ${balanceMotesStr} Motes`);
+      console.log(`[Treasury Agent] Live balance: ${balanceMotesStr} motes`);
     } catch (err: any) {
-      console.error(`[Treasury Agent] Error: Failed to fetch live balance from Casper node: ${err.message}. Triggering fallback balance of 2,450 CSPR.`);
+      console.error(
+        `[Treasury Agent] RPC query failed: ${err.message}. ` +
+        `Using config fallback balance of ${FALLBACK_BALANCE_MOTES} motes.`
+      );
       isFallback = true;
-      balanceMotesStr = '2450000000000';
+      balanceMotesStr = FALLBACK_BALANCE_MOTES;
     }
   } else {
     isFallback = true;
+    console.warn(`[Treasury Agent] No public key available. Using config fallback balance of ${FALLBACK_BALANCE_MOTES} motes.`);
   }
 
+  // ── Allocation Calculation ────────────────────────────────────────────────
   const balanceMotes = BigInt(balanceMotesStr);
-  const balanceCspr = Number(balanceMotes / 1_000_000_000n);
+  const balanceCspr  = Number(balanceMotes / 1_000_000_000n);
 
-  // Capital Allocation Calculation: 10% of current balance
-  let allocatedCspr = balanceMotes / 10n / 1_000_000_000n;
-  
-  // Cap allocation at exactly 500 CSPR
-  if (allocatedCspr > 500n) {
-    allocatedCspr = 500n;
-  }
-
-  // Ensure minimum allocation of 10 CSPR
-  if (allocatedCspr < 10n) {
-    allocatedCspr = 10n;
-  }
+  // ALLOCATION_RATIO% of balance, clamped to [MIN, CAP]
+  let allocatedCspr = balanceMotes / BigInt(100) * BigInt(ALLOCATION_RATIO) / 1_000_000_000n;
+  if (allocatedCspr > ALLOCATION_CAP_CSPR) allocatedCspr = ALLOCATION_CAP_CSPR;
+  if (allocatedCspr < ALLOCATION_MIN_CSPR) allocatedCspr = ALLOCATION_MIN_CSPR;
 
   const allocatedAmountMotes = (allocatedCspr * 1_000_000_000n).toString();
 

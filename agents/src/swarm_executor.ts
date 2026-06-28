@@ -17,18 +17,22 @@ import { analyzeRisk, ClearancePayload } from './risk_analyst';
 
 import * as os from 'os';
 
-// Path to store mock private/public keys (writable on Vercel)
-const isVercel = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
-const PRIVATE_KEY_PATH = isVercel 
-  ? path.join(os.tmpdir(), 'mock_private_key.pem') 
-  : path.join(__dirname, '..', 'mock_private_key.pem');
-const PUBLIC_KEY_PATH = isVercel 
-  ? path.join(os.tmpdir(), 'mock_public_key.pem') 
-  : path.join(__dirname, '..', 'mock_public_key.pem');
+// ── Configuration Layer ──────────────────────────────────────────────────
+const complianceConfig = require(path.join(__dirname, '..', 'config', 'compliance.json'));
 
-// Odra Contract Hash on Casper Testnet (using the deployed hash)
+// Odra Contract Hash on Casper Testnet
 const CONTRACT_HASH = process.env.CONTRACT_HASH || 'hash-184250acf2daff732850c0e14b582fcfaf0c1b7b2f60248c0f362e4d63b8f843';
-const NODE_RPC_URL = 'https://node.testnet.casper.network/rpc';
+const NODE_RPC_URL: string = complianceConfig.network.nodeRpcUrl;
+const PAYMENT_MOTES: number = complianceConfig.network.deploymentPaymentMotes;
+
+// Key paths (writable on Vercel via /tmp)
+const isVercel = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
+const PRIVATE_KEY_PATH = isVercel
+  ? path.join(os.tmpdir(), 'mock_private_key.pem')
+  : path.join(__dirname, '..', 'mock_private_key.pem');
+const PUBLIC_KEY_PATH = isVercel
+  ? path.join(os.tmpdir(), 'mock_public_key.pem')
+  : path.join(__dirname, '..', 'mock_public_key.pem');
 
 export interface PipelineStepResult {
   step: string;
@@ -91,8 +95,7 @@ async function executeContractCall(assetId: string, amountMotes: string, keyPair
     args
   );
 
-  // Define payment (classic payment for contract execution gas)
-  const PAYMENT_MOTES = 15_000_000_000; // 15 CSPR execution fee
+  // Define payment (from config — avoids hardcoded literals)
   const payment = DeployUtil.standardPayment(PAYMENT_MOTES);
 
   // Build Deploy Parameters
@@ -134,13 +137,12 @@ export async function runSwarmPipeline(customAsset?: Partial<RwaAssetData>): Pro
   const keyPair = getOrCreateKeyPair();
   
   // 1. Oracle Ingestion
+  // customAsset overrides are passed as the second argument so the
+  // oracle's deterministic model generates a baseline and then applies
+  // exactly the user-supplied form values on top.
   let oracleData: RwaAssetData;
   try {
-    const defaultAsset = fetchRwaAssetData(customAsset?.assetId);
-    oracleData = {
-      ...defaultAsset,
-      ...customAsset
-    } as RwaAssetData;
+    oracleData = fetchRwaAssetData(customAsset?.assetId, customAsset as Partial<RwaAssetData>);
   } catch (err: any) {
     throw new Error(`Oracle Agent failed: ${err.message}`);
   }

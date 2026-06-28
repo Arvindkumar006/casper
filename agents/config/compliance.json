@@ -1,0 +1,28 @@
+{
+  "_comment": "NexusVault Compliance Configuration — modify this file to update jurisdiction rules and blacklists without altering agent execution code.",
+
+  "underwriting": {
+    "minimumBorrowerCreditScore": 600,
+    "maxRiskBarrier": 0.80,
+    "allocationCapCspr": 500,
+    "allocationMinCspr": 10,
+    "allocationRatioPercent": 10
+  },
+
+  "allowedCountries": ["US", "CA", "IN"],
+
+  "assetBlacklist": [
+    "rwa_blacklist_01",
+    "rwa_blacklist_02",
+    "rwa_property_chicago_666",
+    "rwa_toxic_debt_99"
+  ],
+
+  "network": {
+    "nodeRpcUrl": "https://node.testnet.casper.network/rpc",
+    "networkName": "casper-test",
+    "rpcTimeoutMs": 5000,
+    "treasuryFallbackBalanceMotes": "2450000000000",
+    "deploymentPaymentMotes": 15000000000
+  }
+}
