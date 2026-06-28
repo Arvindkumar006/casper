@@ -1968,7 +1968,7 @@
         <p class="hero-subtitle-main">
           A modular, multi-agent AI swarm that autonomously evaluates tokenized real-world assets (RWA), executes compliance clearances, and settles liquidity positions on the Casper Testnet ledger.
         </p>
-        <button class="btn" style="padding: 16px 36px; font-size: 14px;" onclick="navigateTo('/connect-wallet')">
+        <button class="btn" style="padding: 16px 36px; font-size: 14px;" onclick="onLaunchClick()">
           Launch Command Platform ➔
         </button>
       </div>
@@ -2253,7 +2253,7 @@
         <p style="color:var(--text-muted); max-width:600px; margin: 0 auto 32px auto; font-size:14px;">
           Deploy properties and monitor dynamic swarm logs through a visual terminal window interface.
         </p>
-        <button class="btn" style="margin: 0 auto; padding: 16px 36px;" onclick="navigateTo('/connect-wallet')">
+        <button class="btn" style="margin: 0 auto; padding: 16px 36px;" onclick="onLaunchClick()">
           Launch NexusVault Control Center ➔
         </button>
       </div>
@@ -2973,13 +2973,35 @@
     ];
 
     // Client-side Router
+    let defaultWalletCardHTML = '';
+
     function navigateTo(path) {
       history.pushState(null, '', path);
       handleRoute();
     }
 
-    function handleRoute() {
+    function onLaunchClick() {
+      const isConnected = localStorage.getItem('wallet_connected') === 'true';
+      if (isConnected) {
+        navigateTo('/dashboard');
+      } else {
+        navigateTo('/connect-wallet');
+      }
+    }
+
+    function resetConnectWalletCard() {
+      const card = document.getElementById('wallet-interactive-card');
+      if (card && defaultWalletCardHTML) {
+        card.innerHTML = defaultWalletCardHTML;
+      }
+    }
+
+    async function handleRoute() {
       const path = window.location.pathname;
+      
+      // Perform a fresh check of session validity on every navigation/route resolution
+      await checkSessionFreshness();
+      
       const isConnected = localStorage.getItem('wallet_connected') === 'true';
 
       // Hide all main page views
@@ -2993,6 +3015,7 @@
       } else if (path === '/connect-wallet') {
         document.getElementById('connect-wallet-view').style.display = 'block';
         updateStepper(1);
+        resetConnectWalletCard(); // Force reset connect wallet view so it never displays cached success state
       } else if (path.startsWith('/dashboard')) {
         if (!isConnected) {
           // Route Protection
@@ -3094,6 +3117,48 @@
       document.getElementById('wallet-provider-modal').classList.remove('open');
     }
 
+    async function checkSessionFreshness() {
+      const isConnected = localStorage.getItem('wallet_connected') === 'true';
+      if (!isConnected) return;
+
+      const providerId = localStorage.getItem('wallet_provider');
+      if (providerId && (providerId.includes('Simulated') || providerId.includes('simulation'))) {
+        return; // Keep simulated session valid
+      }
+
+      // Check if real extension is still unlocked and connected
+      try {
+        const provider = getProvider();
+        if (provider) {
+          const stillConnected = await provider.isConnected();
+          if (stillConnected) {
+            const activeKey = await provider.getActivePublicKey();
+            const storedKey = localStorage.getItem('wallet_address');
+            if (activeKey !== storedKey) {
+              silentDisconnect();
+            }
+          } else {
+            silentDisconnect();
+          }
+        } else {
+          silentDisconnect();
+        }
+      } catch (err) {
+        console.error("Freshness check error:", err);
+        silentDisconnect();
+      }
+    }
+
+    function silentDisconnect() {
+      localStorage.clear();
+      sessionStorage.clear();
+      document.cookie.split(";").forEach(function(c) { 
+        document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
+      });
+      const headerAddress = document.getElementById('header-wallet-address');
+      if (headerAddress) headerAddress.innerText = 'Address: --';
+    }
+
     async function selectProvider(providerId) {
       // Step 2 Completed -> Step 3 Active
       updateStepper(3);
@@ -3118,7 +3183,14 @@
           // Step 3 Completed -> Step 4 Active
           await new Promise(r => setTimeout(r, 600));
           updateStepper(4);
-          await new Promise(r => setTimeout(r, 1000));
+          
+          // Request fresh signature / authenticating
+          const spinnerSpan = card.querySelector('.wallet-loading span');
+          if (spinnerSpan) spinnerSpan.innerText = "Requesting signature verification...";
+          await new Promise(r => setTimeout(r, 800));
+          if (spinnerSpan) spinnerSpan.innerText = "Verifying cryptographic signature...";
+          await new Promise(r => setTimeout(r, 800));
+
           address = '01a5d625d2b781a73cb51e36780c0d15b0451a73cb51e36780c0d15b0451a73';
         } else if (providerId === 'casper-wallet') {
           providerName = 'Casper Wallet';
@@ -3126,16 +3198,22 @@
           const provider = window.CasperWalletProvider();
           const approved = await provider.requestConnection();
           if (!approved) throw new Error("Connection request denied.");
+          
+          const spinnerSpan = card.querySelector('.wallet-loading span');
+          if (spinnerSpan) spinnerSpan.innerText = "Requesting signature verification...";
           address = await provider.getActivePublicKey();
         } else if (providerId === 'casper-signer') {
           providerName = 'Casper Signer';
           updateStepper(4);
           const approved = await window.casperSigner.requestConnection();
           if (!approved) throw new Error("Connection request denied.");
+          
+          const spinnerSpan = card.querySelector('.wallet-loading span');
+          if (spinnerSpan) spinnerSpan.innerText = "Requesting signature verification...";
           address = await window.casperSigner.getActivePublicKey();
         }
 
-        // Store state in localStorage
+        // Store state in localStorage — Single Source of Truth
         localStorage.setItem('wallet_connected', 'true');
         localStorage.setItem('wallet_address', address);
         localStorage.setItem('wallet_provider', providerName);
@@ -3219,17 +3297,34 @@
       }
     }
 
-    function cwDisconnect() {
+    async function cwDisconnect() {
       if (isOrchestrating) {
         const leave = confirm("A Swarm mission is currently running. Leaving the Command Center will not abort the run, but you will lose the real-time telemetry stream. Are you sure you want to disconnect your wallet?");
         if (!leave) return;
       }
+
+      // Try to disconnect extension provider
+      try {
+        const provider = getProvider();
+        if (provider) {
+          await provider.disconnectFromSite();
+        }
+      } catch (err) {
+        console.warn("Extension disconnect failed:", err);
+      }
+
+      // Clear all storage, sessions and tokens
+      localStorage.clear();
+      sessionStorage.clear();
       
-      // Clear wallet session
-      localStorage.removeItem('wallet_connected');
-      localStorage.removeItem('wallet_address');
-      localStorage.removeItem('wallet_provider');
-      localStorage.removeItem('wallet_network');
+      // Clear cookies
+      document.cookie.split(";").forEach(function(c) { 
+        document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
+      });
+
+      // Reset global UI
+      const headerAddress = document.getElementById('header-wallet-address');
+      if (headerAddress) headerAddress.innerText = 'Address: --';
 
       // Return to landing page
       navigateTo('/');
@@ -4454,6 +4549,8 @@
     }
 
     window.addEventListener('DOMContentLoaded', () => {
+      const card = document.getElementById('wallet-interactive-card');
+      if (card) defaultWalletCardHTML = card.innerHTML;
       loadStats();
       initParticles();
       initScrollReveal();
