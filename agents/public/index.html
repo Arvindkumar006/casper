@@ -3117,6 +3117,19 @@
       document.getElementById('wallet-provider-modal').classList.remove('open');
     }
 
+    function getCasperProvider() {
+      if (typeof window === "undefined" || !window.CasperWalletProvider) return null;
+      try {
+        return window.CasperWalletProvider();
+      } catch (_) {
+        try {
+          return new window.CasperWalletProvider();
+        } catch (_) {
+          return window.CasperWalletProvider;
+        }
+      }
+    }
+
     async function checkSessionFreshness() {
       const isConnected = localStorage.getItem('wallet_connected') === 'true';
       if (!isConnected) return;
@@ -3128,7 +3141,7 @@
 
       // Check if real extension is still unlocked and connected
       try {
-        const provider = getProvider();
+        const provider = getCasperProvider();
         if (provider) {
           const stillConnected = await provider.isConnected();
           if (stillConnected) {
@@ -3195,7 +3208,7 @@
         } else if (providerId === 'casper-wallet') {
           providerName = 'Casper Wallet';
           updateStepper(4);
-          const provider = window.CasperWalletProvider();
+          const provider = getCasperProvider();
           const approved = await provider.requestConnection();
           if (!approved) throw new Error("Connection request denied.");
           
@@ -3305,7 +3318,7 @@
 
       // Try to disconnect extension provider
       try {
-        const provider = getProvider();
+        const provider = getCasperProvider();
         if (provider) {
           await provider.disconnectFromSite();
         }
