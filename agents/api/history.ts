@@ -60,10 +60,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const fetchPromise = (async () => {
         const stateRootHash = await rpcService.getStateRootHash();
-        const balanceUref = await rpcService.getAccountBalanceUrefByPublicKey(stateRootHash, clPubKey);
-        const balanceBigNumber = await rpcService.getAccountBalance(stateRootHash, balanceUref);
-        const balanceMotes = BigInt(balanceBigNumber.toString());
-        return Number(balanceMotes / 1_000_000_000n);
+        try {
+          const balanceUref = await rpcService.getAccountBalanceUrefByPublicKey(stateRootHash, clPubKey);
+          const balanceBigNumber = await rpcService.getAccountBalance(stateRootHash, balanceUref);
+          const balanceMotes = BigInt(balanceBigNumber.toString());
+          return Number(balanceMotes / 1_000_000_000n);
+        } catch (_) {
+          return 0;
+        }
       })();
 
       const timeoutPromise = new Promise<never>((_, reject) =>
@@ -75,7 +79,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         balanceCspr = fetchedBalance;
       }
     } catch (err: any) {
-      console.warn(`[Vercel Serverless] Failed to query live balance from Casper node: ${err.message}`);
+      console.warn(`[Vercel Serverless] Failed to query live balance: ${err.message}`);
+      balanceCspr = 0;
     }
 
     return res.status(200).json({

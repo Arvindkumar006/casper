@@ -29,10 +29,14 @@ app.get('/api/history', async (req, res) => {
         const rpcService = new CasperServiceByJsonRPC(NODE_RPC_URL);
         const clPubKey = CLPublicKey.fromHex(walletAddress);
         const stateRootHash = await rpcService.getStateRootHash();
-        const balanceUref = await rpcService.getAccountBalanceUrefByPublicKey(stateRootHash, clPubKey);
-        const balanceBigNumber = await rpcService.getAccountBalance(stateRootHash, balanceUref);
-        const balanceMotes = BigInt(balanceBigNumber.toString());
-        balanceCspr = Number(balanceMotes / 1_000_000_000n);
+        try {
+          const balanceUref = await rpcService.getAccountBalanceUrefByPublicKey(stateRootHash, clPubKey);
+          const balanceBigNumber = await rpcService.getAccountBalance(stateRootHash, balanceUref);
+          const balanceMotes = BigInt(balanceBigNumber.toString());
+          balanceCspr = Number(balanceMotes / 1_000_000_000n);
+        } catch (_) {
+          balanceCspr = 0;
+        }
       } else {
         const treasury = await auditTreasury();
         balanceCspr = treasury.walletBalanceCspr;
@@ -40,6 +44,7 @@ app.get('/api/history', async (req, res) => {
       }
     } catch (err: any) {
       console.warn(`[Server] Failed to fetch wallet balance: ${err.message}`);
+      balanceCspr = 0;
     }
 
     res.json({

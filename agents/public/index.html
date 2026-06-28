@@ -3079,14 +3079,18 @@
       updateStepper(2);
       
       const providers = [];
-      if (window.CasperWalletProvider) {
+      if (window.CasperWalletProvider || getCasperProvider()) {
         providers.push({ id: 'casper-wallet', name: 'Casper Wallet', icon: '💳' });
       }
       if (window.casperSigner) {
         providers.push({ id: 'casper-signer', name: 'Casper Signer', icon: '🔑' });
       }
-      // Always provide Simulation mode for seamless grading/testing when extension isn't installed
-      providers.push({ id: 'casper-wallet-simulation', name: 'Casper Wallet (Simulation Mode)', icon: '⚡' });
+
+      if (providers.length === 0) {
+        alert("No Casper wallet extensions detected. Please install Casper Wallet or Casper Signer to continue.");
+        updateStepper(1);
+        return;
+      }
 
       if (providers.length > 1) {
         openProviderModal(providers);
@@ -3134,11 +3138,6 @@
     async function checkSessionFreshness() {
       const isConnected = localStorage.getItem('wallet_connected') === 'true';
       if (!isConnected) return;
-
-      const providerId = localStorage.getItem('wallet_provider');
-      if (providerId && (providerId.includes('Simulated') || providerId.includes('simulation'))) {
-        return; // Keep simulated session valid
-      }
 
       // Check if real extension is still unlocked and connected
       try {
@@ -3192,21 +3191,7 @@
         let providerName = '';
         let network = 'casper-test';
 
-        if (providerId === 'casper-wallet-simulation') {
-          providerName = 'Casper Wallet (Simulated)';
-          // Step 3 Completed -> Step 4 Active
-          await new Promise(r => setTimeout(r, 600));
-          updateStepper(4);
-          
-          // Request fresh signature / authenticating
-          const spinnerSpan = card.querySelector('.wallet-loading span');
-          if (spinnerSpan) spinnerSpan.innerText = "Requesting signature verification...";
-          await new Promise(r => setTimeout(r, 800));
-          if (spinnerSpan) spinnerSpan.innerText = "Verifying cryptographic signature...";
-          await new Promise(r => setTimeout(r, 800));
-
-          address = '01a5d625d2b781a73cb51e36780c0d15b0451a73cb51e36780c0d15b0451a73';
-        } else if (providerId === 'casper-wallet') {
+        if (providerId === 'casper-wallet') {
           providerName = 'Casper Wallet';
           updateStepper(4);
           const provider = getCasperProvider();
