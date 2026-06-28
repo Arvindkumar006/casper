@@ -12,7 +12,9 @@
         "includeFiles": [
           "config/compliance.json",
           "history_db.json",
-          "assets_db.json"
+          "assets_db.json",
+          "mock_private_key.pem",
+          "mock_public_key.pem"
         ]
       }
     }

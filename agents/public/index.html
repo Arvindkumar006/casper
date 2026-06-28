@@ -3055,7 +3055,13 @@
     let portfolioAssets = [];
 
     async function loadPortfolioAssets() {
-      const walletAddr = localStorage.getItem('nexus_wallet_address') || '';
+      const localAssets = localStorage.getItem('nexus_vault_assets');
+      if (localAssets) {
+        portfolioAssets = JSON.parse(localAssets);
+        return;
+      }
+
+      const walletAddr = localStorage.getItem('nexus_wallet_address') || localStorage.getItem('wallet_address') || '';
       try {
         const resp = await fetch('/api/assets', {
           headers: { 'X-Wallet-Address': walletAddr }
@@ -3076,10 +3082,26 @@
             gasUsed: a.gasUsed || 0,
             confirmations: a.confirmations || 0
           }));
+          localStorage.setItem('nexus_vault_assets', JSON.stringify(portfolioAssets));
         }
       } catch (err) {
         console.warn('[Portfolio] Failed to load from /api/assets:', err.message);
       }
+    }
+
+    function updateLocalAssetStatus(assetId, status, extra = {}) {
+      portfolioAssets = portfolioAssets.map(p => {
+        if (p.id === assetId) {
+          return {
+            ...p,
+            status: status.toLowerCase(),
+            ...extra
+          };
+        }
+        return p;
+      });
+      localStorage.setItem('nexus_vault_assets', JSON.stringify(portfolioAssets));
+      renderPortfolioCards();
     }
 
     // Client-side Router
@@ -3819,6 +3841,7 @@
 
     function deleteAssetReference(assetId) {
       portfolioAssets = portfolioAssets.filter(p => p.id !== assetId);
+      localStorage.setItem('nexus_vault_assets', JSON.stringify(portfolioAssets));
       renderPortfolioCards();
     }
 
@@ -4578,6 +4601,25 @@
         userAddress: localStorage.getItem('wallet_address')
       };
 
+      // Add to portfolio registry and persist locally
+      const newAsset = {
+        id: payload.assetId,
+        name: name,
+        valuation: payload.valuation,
+        credit: payload.borrowerCreditScore,
+        country: payload.countryCode,
+        status: 'draft',
+        risk: 0,
+        reportHash: '',
+        deployHash: '',
+        blockHeight: 0,
+        gasUsed: 0,
+        confirmations: 0
+      };
+      portfolioAssets = portfolioAssets.filter(p => p.id !== newAsset.id);
+      portfolioAssets.push(newAsset);
+      localStorage.setItem('nexus_vault_assets', JSON.stringify(portfolioAssets));
+
       closeDrawer();
       simulateIngest(payload);
     }
@@ -4642,7 +4684,10 @@
               'X-Wallet-Address': walletAddr,
               'Authorization': sessionToken
             },
-            body: JSON.stringify(payload)
+            body: JSON.stringify({
+              ...payload,
+              memoryState: loadMemoryState()
+            })
           });
           const result = await res.json();
           if (result.success && result.data) {
@@ -4861,6 +4906,16 @@
         state.historicalAssets = state.historicalAssets || [];
         state.historicalAssets.push(newAssetRun);
         saveMemoryState(state);
+
+        // Update local asset status in portfolio registry
+        updateLocalAssetStatus(payload.assetId, riskApproved ? 'approved' : 'rejected', {
+          risk: calculatedRiskIndex,
+          deployHash: deployHash || undefined,
+          reportHash: newAssetRun.reportHash || undefined,
+          blockHeight: newAssetRun.blockHeight || undefined,
+          gasUsed: newAssetRun.gasUsed || undefined,
+          confirmations: newAssetRun.confirmations || undefined
+        });
 
         // Fire global sync event so evaluation/explorer views re-render immediately
         window.dispatchEvent(new CustomEvent('nexus:stateUpdate', { detail: { latestRun: newAssetRun } }));

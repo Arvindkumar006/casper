@@ -9,7 +9,7 @@ import {
   decodeBase16 
 } from 'casper-js-sdk';
 
-import { loadMemory, updateMemory, MemoryData } from './memory_engine';
+import { loadMemory, saveMemory, updateMemory, MemoryData } from './memory_engine';
 import { fetchRwaAssetData, RwaAssetData } from './oracle_agent';
 import { validateCompliance, ComplianceReport } from './compliance_agent';
 import { auditTreasury, TreasuryReport } from './treasury_agent';
@@ -144,7 +144,13 @@ function printRow(label: string, value: string | number | boolean): void {
 /**
  * Runs the collaborative multi-agent pipeline programmatically.
  */
-export async function runSwarmPipeline(customAsset?: Partial<RwaAssetData>): Promise<PipelineRunResult> {
+export async function runSwarmPipeline(
+  customAsset?: Partial<RwaAssetData>,
+  clientMemory?: MemoryData
+): Promise<PipelineRunResult> {
+  if (clientMemory) {
+    saveMemory(clientMemory);
+  }
   const keyPair = getOrCreateKeyPair();
   
   // 1. Oracle Ingestion

@@ -52,6 +52,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const body = req.body && Object.keys(req.body).length > 0 ? req.body : {};
     const assetId: string | undefined = body.assetId;
+    const clientMemory = body.memoryState;
 
     // ── Resolve asset from registry if assetId provided (T1-06) ─────────
     let customAsset: any = body;
@@ -77,8 +78,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       customAsset = { ...body, userAddress: walletAddress };
     }
 
+    // Remove clientMemory field from customAsset payload to keep it clean
+    delete (customAsset as any).memoryState;
+
     // ── Run Pipeline ─────────────────────────────────────────────────────
-    const result = await runSwarmPipeline(customAsset);
+    const result = await runSwarmPipeline(customAsset, clientMemory);
 
     // ── Update asset lifecycle status based on pipeline outcome (T1-03) ──
     if (assetId) {

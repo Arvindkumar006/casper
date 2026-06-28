@@ -172,12 +172,16 @@ app.post(['/api/run', '/api/execute-mission'], async (req, res) => {
       }
     }
 
-    console.log('[Server] Swarm execution triggered via web console.');
-    const result = await runSwarmPipeline(customAsset);
-    res.json({
-      success: true,
-      data: result
-    });
+     console.log('[Server] Swarm execution triggered via web console.');
+     const clientMemory = customAsset && (customAsset as any).memoryState;
+     if (customAsset) {
+       delete (customAsset as any).memoryState;
+     }
+     const result = await runSwarmPipeline(customAsset, clientMemory);
+     res.json({
+       success: true,
+       data: result
+     });
   } catch (err: any) {
     console.error(`[Server] Swarm run failed: ${err.message}`);
     res.status(500).json({ success: false, error: err.message });
