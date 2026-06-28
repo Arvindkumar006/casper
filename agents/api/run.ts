@@ -58,10 +58,10 @@ function simulatePipeline(customAsset?: any) {
   });
 
   // 3. Treasury
-  const walletBalanceCspr = 2924;
+  const walletBalanceCspr = customAsset?.userAddress === '01a5d625d2b781a73cb51e36780c0d15b0451a73cb51e36780c0d15b0451a73' ? 5000 : 2924;
   const allocatedAmountCspr = Math.min(500, Math.floor(walletBalanceCspr * 0.1));
   const treasuryData = {
-    walletPublicKey: '013E2fA9cadCfcD097e02820025B24...',
+    walletPublicKey: customAsset?.userAddress || '013E2fA9cadCfcD097e02820025B24...',
     walletBalanceCspr,
     allocatedAmountCspr,
     allocatedAmountMotes: (allocatedAmountCspr * 1_000_000_000).toString(),

@@ -161,7 +161,7 @@ export async function runSwarmPipeline(customAsset?: Partial<RwaAssetData>): Pro
   // 3. Treasury Audit
   let treasuryData: TreasuryReport;
   try {
-    treasuryData = await auditTreasury(NODE_RPC_URL);
+    treasuryData = await auditTreasury(NODE_RPC_URL, (customAsset as any)?.userAddress);
   } catch (err: any) {
     throw new Error(`Treasury Agent failed: ${err.message}`);
   }

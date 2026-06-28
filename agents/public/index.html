@@ -2979,6 +2979,7 @@
       history.pushState(null, '', path);
       handleRoute();
     }
+    window.navigateTo = navigateTo;
 
     function onLaunchClick() {
       const isConnected = localStorage.getItem('wallet_connected') === 'true';
@@ -3276,6 +3277,7 @@
     }
 
     function updateDashboardWalletUI() {
+      window.updateDashboardWalletUI = updateDashboardWalletUI;
       const address = localStorage.getItem('wallet_address') || '--';
       const provider = localStorage.getItem('wallet_provider') || '--';
       const network = localStorage.getItem('wallet_network') || '--';
@@ -4361,7 +4363,8 @@
         downPayment,
         countryCode,
         borrowerCreditScore,
-        currentInterestRate: interestRate
+        currentInterestRate: interestRate,
+        userAddress: localStorage.getItem('wallet_address')
       };
 
       closeDrawer();
@@ -4791,7 +4794,37 @@
         // Sync legacy sidebar-key span if present
         const legacyKey = document.getElementById('sidebar-key');
         if (legacyKey) legacyKey.textContent = (status === 'connected' && pubKey) ? truncKey(pubKey) : '--';
+
+        // Sync with app session (Single Source of Truth)
+        if (status === 'connected' && pubKey) {
+          localStorage.setItem('wallet_connected', 'true');
+          localStorage.setItem('wallet_address', pubKey);
+          localStorage.setItem('wallet_provider', window.CasperWalletProvider ? 'Casper Wallet' : 'Casper Signer');
+          localStorage.setItem('wallet_network', 'casper-test');
+          if (window.updateDashboardWalletUI) {
+            window.updateDashboardWalletUI();
+          }
+        } else if (status === 'disconnected') {
+          // If we disconnected legacy, clear storage and redirect
+          const wasConnected = localStorage.getItem('wallet_connected') === 'true';
+          if (wasConnected) {
+            localStorage.clear();
+            sessionStorage.clear();
+            document.cookie.split(";").forEach(function(c) { 
+              document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
+            });
+            const headerAddress = document.getElementById('header-wallet-address');
+            if (headerAddress) headerAddress.innerText = 'Address: --';
+            if (window.navigateTo) {
+              window.navigateTo('/');
+            }
+          }
+        }
       }
+
+      window.updateCasperWalletState = function(status, pubKey) {
+        setState(status, pubKey);
+      };
 
       // ── Actions ────────────────────────────────────────────────────────
       async function cwConnect() {
@@ -4866,6 +4899,14 @@
         window.addEventListener(CWEvents.Disconnected,     onDisconnected);
         window.addEventListener(CWEvents.ActiveKeyChanged, onActiveKeyChanged);
         window.addEventListener(CWEvents.Locked,           onLocked);
+
+        // Check for our app session first
+        const isAppConnected = localStorage.getItem('wallet_connected') === 'true';
+        if (isAppConnected) {
+          const appPubKey = localStorage.getItem('wallet_address');
+          setState('connected', appPubKey);
+          return;
+        }
 
         // Check for an already-authorized session
         try {
