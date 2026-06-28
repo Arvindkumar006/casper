@@ -15,9 +15,16 @@ import { validateCompliance, ComplianceReport } from './compliance_agent';
 import { auditTreasury, TreasuryReport } from './treasury_agent';
 import { analyzeRisk, ClearancePayload } from './risk_analyst';
 
-// Path to store mock private/public keys
-const PRIVATE_KEY_PATH = path.join(__dirname, '..', 'mock_private_key.pem');
-const PUBLIC_KEY_PATH = path.join(__dirname, '..', 'mock_public_key.pem');
+import * as os from 'os';
+
+// Path to store mock private/public keys (writable on Vercel)
+const isVercel = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
+const PRIVATE_KEY_PATH = isVercel 
+  ? path.join(os.tmpdir(), 'mock_private_key.pem') 
+  : path.join(__dirname, '..', 'mock_private_key.pem');
+const PUBLIC_KEY_PATH = isVercel 
+  ? path.join(os.tmpdir(), 'mock_public_key.pem') 
+  : path.join(__dirname, '..', 'mock_public_key.pem');
 
 // Odra Contract Hash on Casper Testnet (using the deployed hash)
 const CONTRACT_HASH = process.env.CONTRACT_HASH || 'hash-184250acf2daff732850c0e14b582fcfaf0c1b7b2f60248c0f362e4d63b8f843';

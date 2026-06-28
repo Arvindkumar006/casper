@@ -2,7 +2,12 @@ import { CasperClient, CasperServiceByJsonRPC, Keys, CLPublicKey } from 'casper-
 import * as path from 'path';
 import * as fs from 'fs';
 
-const PRIVATE_KEY_PATH = path.join(__dirname, '..', 'mock_private_key.pem');
+import * as os from 'os';
+
+const isVercel = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
+const PRIVATE_KEY_PATH = isVercel 
+  ? path.join(os.tmpdir(), 'mock_private_key.pem') 
+  : path.join(__dirname, '..', 'mock_private_key.pem');
 
 export interface TreasuryReport {
   walletPublicKey: string;
