@@ -138,11 +138,11 @@ export async function runSwarmPipeline(customAsset?: Partial<RwaAssetData>): Pro
   
   // 1. Oracle Ingestion
   // customAsset overrides are passed as the second argument so the
-  // oracle's deterministic model generates a baseline and then applies
-  // exactly the user-supplied form values on top.
+  // oracle's deterministic model generates a live-fed baseline and then
+  // applies exactly the user-supplied form values on top.
   let oracleData: RwaAssetData;
   try {
-    oracleData = fetchRwaAssetData(customAsset?.assetId, customAsset as Partial<RwaAssetData>);
+    oracleData = await fetchRwaAssetData(customAsset?.assetId, customAsset as Partial<RwaAssetData>);
   } catch (err: any) {
     throw new Error(`Oracle Agent failed: ${err.message}`);
   }
@@ -278,7 +278,7 @@ async function main() {
   const result = await runSwarmPipeline();
 
   // Print Step 1: Oracle
-  printHeaderBox('1. ORACLE AGENT (DATA INGESTION)');
+  printHeaderBox('1. ORACLE AGENT (LIVE DATA INGESTION)');
   const oracleAsset = result.oracle.data as RwaAssetData;
   printRow('Ingested Asset ID', oracleAsset.assetId);
   printRow('Asset Class', oracleAsset.assetType);
@@ -288,6 +288,8 @@ async function main() {
   printRow('Interest Rate', `${(oracleAsset.currentInterestRate * 100).toFixed(2)}%`);
   printRow('Country of Origin', oracleAsset.countryCode);
   printRow('Borrower Credit Score', oracleAsset.borrowerCreditScore);
+  printRow('Live CSPR Price (USD)', oracleAsset.liveCsprPriceUsd > 0 ? `$${oracleAsset.liveCsprPriceUsd}` : 'N/A (fallback)');
+  printRow('Live Feed Active', oracleAsset.liveDataActive ? '✅ YES — CoinGecko live data' : '⚠️  NO  — deterministic fallback');
 
   // Print Step 2: Compliance
   printHeaderBox('2. COMPLIANCE AGENT (JURISDICTION & SAFETY)');
